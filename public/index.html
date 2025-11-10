@@ -12,9 +12,9 @@ html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,A
 #viewport{flex:1;display:flex;align-items:stretch;justify-content:stretch;background:#000}
 canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
 .info{color:#cbd5e1;font-size:13px;margin-left:8px}
-.dev-button{position:fixed;right:12px;top:12px;background:#0b84ff;color:#000;padding:6px 8px;border-radius:6px;cursor:pointer;z-index:9999;font-weight:700}
-.dev-overlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(3,7,12,0.85);display:none;align-items:center;justify-content:center;z-index:9998}
-.dev-panel{width:720px;max-width:95%;max-height:90%;overflow:auto;background:#061021;border-radius:10px;padding:18px;border:1px solid #123}
+.dev-trigger{margin-left:8px;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#0b84ff;color:#000;font-weight:bold;cursor:pointer}
+.dev-overlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(3,7,12,0.85);display:none;align-items:center;justify-content:center;z-index:9999}
+.dev-panel{width:760px;max-width:95%;max-height:90%;overflow:auto;background:#061021;border-radius:10px;padding:18px;border:1px solid #123}
 .dev-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .dev-section{background:#05101a;padding:10px;border-radius:8px;border:1px solid #0b2430;color:#dbe}
 .small{font-size:12px;color:#9cb}
@@ -30,58 +30,72 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
 .import-bar-inner{height:100%;width:0%;background:#0bf58b;transition:width 120ms linear}
 .import-progress-meta{font-size:12px;color:#9cb;min-width:160px;margin-left:8px;text-align:right}
 .range{width:100%}
-.info-circle{display:inline-block;width:18px;height:18px;border-radius:50%;background:#0b84ff;color:#000;text-align:center;line-height:18px;font-weight:700;margin-left:8px;cursor:pointer}
-.tooltip{position:absolute;background:#0d1820;border:1px solid #123;padding:8px;border-radius:6px;color:#bfe;max-width:320px;display:none;z-index:10000}
+.version-row{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.update-row{display:flex;gap:8px;align-items:center}
+.note-btn{width:18px;height:18px;border-radius:50%;background:#0b84ff;color:#000;display:inline-flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer}
+.dev-info{font-size:13px;color:#cfe;margin-left:8px}
 </style>
 </head>
 <body>
 <div id="topbar">
   <input id="address" type="text" placeholder="https://example.com" />
   <button id="go">Go</button>
-  <div class="info" id="status">connecting...</div>
+  <div id="status" class="info">connecting...</div>
+  <div id="devTrigger" class="dev-trigger" title="Dev menu">i</div>
 </div>
 <div id="container">
   <div id="viewport">
     <canvas id="screen" width="1280" height="800"></canvas>
   </div>
 </div>
-<button class="dev-button" id="openDev">Dev</button>
 <div class="dev-overlay" id="devOverlay" aria-hidden="true">
   <div class="dev-panel" role="dialog" aria-modal="true" aria-label="Dev Menu">
     <button class="dev-close" id="devClose">✕</button>
-    <h2>Dev Menu <span class="small" style="margin-left:12px" id="currentVersionLabel"></span></h2>
+    <h2>Dev Menu <span class="small dev-info" id="devShortNote">Click the blue circle in the top-right of the topbar to open this menu.</span></h2>
     <div class="dev-grid">
       <div class="dev-section">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div><strong>Server Info</strong><div class="small">what this is running on</div></div>
           <div id="devStatusBadge" class="small">loading...</div>
         </div>
-        <div class="code" id="devServerInfo" style="margin-top:10px;max-height:200px"></div>
+        <div class="code" id="devServerInfo" style="margin-top:10px;max-height:180px"></div>
       </div>
       <div class="dev-section">
-        <strong>Import / Export & Updates</strong>
-        <div class="small">export profile, import (.tar.gz), or update code</div>
+        <div class="version-row">
+          <div>
+            <strong>Update / Version</strong>
+            <div class="small">current channel and version</div>
+          </div>
+          <div style="text-align:right">
+            <div id="localVersion" class="small">—</div>
+            <div style="margin-top:6px">
+              <button id="checkUpdatesBtn">Check updates</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:8px" class="small">Channel
+          <label style="margin-left:8px"><input type="radio" name="channel" value="stable" id="chStable" /> Stable</label>
+          <label style="margin-left:8px"><input type="radio" name="channel" value="unstable" id="chUnstable" /> Unstable</label>
+          <span class="note-btn" id="channelInfo" title="What does this mean?">?</span>
+        </div>
+        <div style="margin-top:10px" class="update-row">
+          <button id="downloadUpdateBtn" disabled>Download update</button>
+          <button id="applyUpdateBtn" disabled>Apply update</button>
+          <div id="updateStatus" class="small" style="margin-left:8px"></div>
+        </div>
+        <div style="margin-top:10px" class="small">If apply asks to restart the server, you can restart manually or use the Apply with restart button.</div>
+      </div>
+      <div class="dev-section">
+        <strong>Import / Export</strong>
+        <div class="small">export current profile or import (.tar.gz, .zip)</div>
         <div style="margin-top:8px" class="dev-actions">
-          <button id="devExportBtn">Export (min)</button>
+          <button id="devExportBtn">Export (minimized)</button>
           <button id="devExportFullBtn">Export (full)</button>
           <label>
             <input id="devImportFile" type="file" accept=".zip,.tar.gz,.tgz" />
             <button id="devImportBtn">Import</button>
           </label>
-        </div>
-        <div style="margin-top:10px">
-          <div style="display:flex;gap:8px;align-items:center">
-            <label class="small">Channel</label>
-            <select id="updateChannel">
-              <option value="stable">stable</option>
-              <option value="unstable">unstable</option>
-            </select>
-            <button id="checkUpdatesBtn">Check updates</button>
-            <button id="applyUpdateBtn">Apply update</button>
-            <button id="downloadUpdateBtn">Download tarball</button>
-            <div class="info-circle" id="updateInfoBtn">i</div>
-          </div>
-          <div id="updateStatus" class="small" style="margin-top:8px"></div>
+          <div id="devImportStatus" class="small" style="margin-left:8px"></div>
         </div>
         <div class="export-progress-wrap" id="exportProgressWrap" role="status" aria-hidden="true">
           <div class="export-bar"><div class="export-bar-inner" id="exportBarInner"></div></div>
@@ -110,7 +124,6 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
     </div>
   </div>
 </div>
-<div class="tooltip" id="updateTooltip">stable: uses GitHub releases/latest (safer). unstable: uses latest commit tarball (more frequent, riskier).</div>
 <script>
 const canvas = document.getElementById('screen')
 const ctx = canvas.getContext('2d')
@@ -139,9 +152,6 @@ async function handleMessage(ev) {
         canvas.height = data.height || canvas.height
         connId = data.connId
         fitCanvas()
-      } else if (data.type === 'file-request') {
-        const fi = document.getElementById('devImportFile')
-        fi && fi.click()
       } else if (data.type === 'navigated') {
         statusEl.textContent = 'navigated: ' + data.url
         setTimeout(() => statusEl.textContent = 'connected', 2000)
@@ -149,7 +159,7 @@ async function handleMessage(ev) {
         try { window.open('','_self').close() } catch (e) {}
         try { location.href = 'about:blank' } catch (e) {}
         try { document.body.innerHTML = '<div style="color:#fff;padding:20px;font-family:monospace">Server shutting down…</div>' } catch (e) {}
-      } else if (data.type && data.type.startsWith('export') || data.type && data.type.startsWith('import')) {
+      } else if (data.type && (data.type.startsWith('export') || data.type.startsWith('import'))) {
         handleDevWsMessage(data)
       }
     } else {
@@ -241,31 +251,12 @@ window.addEventListener('keyup', (e) => { if (e.key.length === 1) return; send({
 goBtn.addEventListener('click', () => {
   const url = addressEl.value.trim()
   if (!url) return
-  if (url === 'dev') { openDevMenu(); return }
   const u = (url.startsWith('http://') || url.startsWith('https://')) ? url : ('https://' + url)
   send({ type: 'navigate', url: u })
 })
 addressEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') goBtn.click() })
-const fileInput = document.createElement('input')
-fileInput.type = 'file'
-fileInput.style.display = 'none'
-fileInput.addEventListener('change', async (ev) => {
-  const file = ev.target.files[0]
-  if (!file) return
-  const form = new FormData()
-  form.append('file', file)
-  try {
-    const resp = await fetch('/upload', { method: 'POST', body: form })
-    const j = await resp.json()
-    if (!j.ok) alert('Upload failed: ' + (j.message || 'unknown'))
-    else alert('Upload sent to remote page')
-  } catch (e) { alert('Upload error: ' + e) }
-  fileInput.value = ''
-})
-document.body.appendChild(fileInput)
-
+const devTrigger = document.getElementById('devTrigger')
 const devOverlay = document.getElementById('devOverlay')
-const openDev = document.getElementById('openDev')
 const devClose = document.getElementById('devClose')
 const devCloseBtn = document.getElementById('devCloseBtn')
 const devRefresh = document.getElementById('devRefresh')
@@ -284,46 +275,40 @@ const importProgressMeta = document.getElementById('importProgressMeta')
 const qualityRange = document.getElementById('qualityRange')
 const qualityValue = document.getElementById('qualityValue')
 const setQualityBtn = document.getElementById('setQualityBtn')
-const updateChannel = document.getElementById('updateChannel')
 const checkUpdatesBtn = document.getElementById('checkUpdatesBtn')
+const downloadUpdateBtn = document.getElementById('downloadUpdateBtn')
 const applyUpdateBtn = document.getElementById('applyUpdateBtn')
 const updateStatus = document.getElementById('updateStatus')
-const downloadUpdateBtn = document.getElementById('downloadUpdateBtn')
-const updateInfoBtn = document.getElementById('updateInfoBtn')
-const updateTooltip = document.getElementById('updateTooltip')
-const currentVersionLabel = document.getElementById('currentVersionLabel')
-
+const localVersionEl = document.getElementById('localVersion')
+const chStable = document.getElementById('chStable')
+const chUnstable = document.getElementById('chUnstable')
+const channelInfo = document.getElementById('channelInfo')
 function openDevMenu() { devOverlay.style.display = 'flex'; devOverlay.setAttribute('aria-hidden', 'false'); refreshDevState() }
 function closeDevMenu() { devOverlay.style.display = 'none'; devOverlay.setAttribute('aria-hidden', 'true') }
-openDev.addEventListener('click', openDevMenu)
+devTrigger.addEventListener('click', openDevMenu)
 devClose.addEventListener('click', closeDevMenu)
 devCloseBtn.addEventListener('click', closeDevMenu)
 devRefresh.addEventListener('click', refreshDevState)
-
+channelInfo.addEventListener('click', ()=>{ alert('Stable: safer and less frequent updates. Unstable: more frequent features but may be buggy.') })
 function refreshDevState() {
   devServerInfo.textContent = 'loading...'
   devImportStatus.textContent = ''
+  updateStatus.textContent = ''
   fetch('/dev/state').then(r => r.json()).then(j => {
     if (!j.ok) { devServerInfo.textContent = 'error'; return }
     const s = j.stats
     devServerInfo.textContent = JSON.stringify({ pid: s.pid, userDataDir: s.userDataDir, platform: s.platform, arch: s.arch, uptime_s: Math.round(s.uptime), jpegQuality: s.jpegQuality || 60 }, null, 2)
     qualityRange.value = s.jpegQuality || 60
     qualityValue.textContent = qualityRange.value
-    fetch('/dev/version').then(r => r.json()).then(jv => {
-      if (jv && jv.ok) {
-        const st = jv.stable || {}
-        const un = jv.unstable || {}
-        currentVersionLabel.textContent = `stable:${st.currentVersion || 'n/a'} unstable:${un.currentVersion || 'n/a'}`
-      }
-    }).catch(()=>{})
-  }).catch(e => { devServerInfo.textContent = 'error: ' + String(e) })
+    localVersionEl.textContent = (s.localUpdate && s.localUpdate.channel ? s.localUpdate.channel + ' ' + s.localUpdate.version : 'unknown')
+    if (s.localUpdate && s.localUpdate.channel === 'unstable') chUnstable.checked = true; else chStable.checked = true
+    document.getElementById('devStatusBadge').textContent = 'OK'
+  }).catch(e => { devServerInfo.textContent = 'error: ' + String(e); document.getElementById('devStatusBadge').textContent = 'error' })
 }
-
 function showExportProgress() { exportProgressWrap.style.display = 'flex'; exportBarInner.style.width = '2%'; exportProgressMeta.textContent = 'starting...' }
 function hideExportProgress() { exportProgressWrap.style.display = 'none'; exportBarInner.style.width = '0%'; exportProgressMeta.textContent = '' }
 function showImportProgress() { importProgressWrap.style.display = 'flex'; importBarInner.style.width = '2%'; importProgressMeta.textContent = 'starting...' }
 function hideImportProgress() { importProgressWrap.style.display = 'none'; importBarInner.style.width = '0%'; importProgressMeta.textContent = '' }
-
 function handleDevWsMessage(data) {
   if (!data || !data.type) return
   if (data.type === 'export-start') { showExportProgress(); exportProgressMeta.textContent = `Preparing export (${data.filename})` }
@@ -345,7 +330,6 @@ function handleDevWsMessage(data) {
   else if (data.type === 'import-finish') { importBarInner.style.width = '100%'; importProgressMeta.textContent = data.message || 'import complete'; setTimeout(() => hideImportProgress(), 1200) }
   else if (data.type === 'import-error') { importBarInner.style.width = '100%'; importProgressMeta.textContent = 'import error: ' + (data.message || ''); setTimeout(() => hideImportProgress(), 1800) }
 }
-
 function handleMessageWrapper(ev) {
   try {
     if (typeof ev.data === 'string' || ev.data instanceof String) {
@@ -355,7 +339,6 @@ function handleMessageWrapper(ev) {
     } else handleMessage(ev)
   } catch (e) { console.warn(e); handleMessage(ev) }
 }
-
 devExportBtn.addEventListener('click', async () => {
   devImportStatus.textContent = 'starting export...'
   showExportProgress()
@@ -394,7 +377,6 @@ devExportFullBtn.addEventListener('click', async () => {
     hideExportProgress()
   } catch (e) { devImportStatus.textContent = 'export error'; hideExportProgress() }
 })
-
 devImportBtn.addEventListener('click', async () => {
   const f = devImportFile.files[0]
   if (!f) { devImportStatus.textContent = 'select a .zip/.tar.gz first'; return }
@@ -414,7 +396,6 @@ devImportBtn.addEventListener('click', async () => {
     }
   } catch (e) { devImportStatus.textContent = 'import error'; hideImportProgress() }
 })
-
 qualityRange.addEventListener('input', () => { qualityValue.textContent = qualityRange.value })
 setQualityBtn.addEventListener('click', async () => {
   const q = Number(qualityRange.value)
@@ -426,66 +407,49 @@ setQualityBtn.addEventListener('click', async () => {
     } else devImportStatus.textContent = 'failed to update quality'
   } catch (e) { devImportStatus.textContent = 'error updating quality' }
 })
-
 checkUpdatesBtn.addEventListener('click', async () => {
-  const channel = updateChannel.value
   updateStatus.textContent = 'checking...'
   try {
-    const r = await fetch(`/dev/check-updates?channel=${encodeURIComponent(channel)}`)
+    const ch = document.querySelector('input[name="channel"]:checked')?.value || 'stable'
+    const r = await fetch('/dev/check-updates?channel=' + encodeURIComponent(ch))
     const j = await r.json()
     if (!j.ok) { updateStatus.textContent = 'check failed'; return }
-    updateStatus.textContent = `latest: ${j.latestVersion || 'n/a'} ${j.name ? '- ' + j.name : ''}`
-    currentVersionLabel.textContent = `${channel}:${j.latestVersion || 'n/a'}`
-    if (j.tarballUrl) {
+    if (j.updateAvailable) {
+      updateStatus.textContent = 'update available: ' + j.remote.version
       downloadUpdateBtn.disabled = false
-      downloadUpdateBtn.dataset.url = j.tarballUrl
+      applyUpdateBtn.disabled = true
+      downloadUpdateBtn.dataset.channel = ch
+      downloadUpdateBtn.dataset.version = j.remote.version
     } else {
+      updateStatus.textContent = 'up-to-date (' + j.local.version + ')'
       downloadUpdateBtn.disabled = true
-      downloadUpdateBtn.dataset.url = ''
+      applyUpdateBtn.disabled = true
     }
-  } catch (e) { updateStatus.textContent = 'check error' }
+  } catch (e) { updateStatus.textContent = 'error' }
 })
-
 downloadUpdateBtn.addEventListener('click', async () => {
-  const url = downloadUpdateBtn.dataset.url
-  if (!url) return
+  updateStatus.textContent = 'downloading...'
   try {
-    const resp = await fetch(url)
-    if (!resp.ok) { updateStatus.textContent = 'download failed' ; return }
-    const blob = await resp.blob()
-    const a = document.createElement('a')
-    const u = URL.createObjectURL(blob)
-    a.href = u
-    a.download = 'update.tar.gz'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(u), 60000)
-    updateStatus.textContent = 'downloaded tarball (client)'
-  } catch (e) { updateStatus.textContent = 'download error' }
+    const ch = downloadUpdateBtn.dataset.channel || 'stable'
+    const r = await fetch('/dev/download-update?channel=' + encodeURIComponent(ch))
+    const j = await r.json()
+    if (!j.ok) { updateStatus.textContent = 'download failed'; return }
+    updateStatus.textContent = 'downloaded: ready to apply'
+    applyUpdateBtn.disabled = false
+    applyUpdateBtn.dataset.channel = ch
+  } catch (e) { updateStatus.textContent = 'error' }
 })
-
 applyUpdateBtn.addEventListener('click', async () => {
-  const channel = updateChannel.value
   updateStatus.textContent = 'applying...'
   try {
-    const r = await fetch('/dev/apply-update', { method: 'POST', body: new URLSearchParams({ channel }) })
+    const ch = applyUpdateBtn.dataset.channel || 'stable'
+    const r = await fetch('/dev/apply-update?channel=' + encodeURIComponent(ch) + '&restart=0', { method: 'POST' })
     const j = await r.json()
-    if (j && j.ok) {
-      updateStatus.textContent = 'applied. restart server to load new code.'
-      setTimeout(() => location.reload(), 1200)
-    } else updateStatus.textContent = 'apply failed: ' + (j && j.message ? j.message : 'unknown')
-  } catch (e) { updateStatus.textContent = 'apply error' }
+    if (!j.ok) { updateStatus.textContent = 'apply failed'; return }
+    updateStatus.textContent = 'applied: ' + (j.message || '')
+    refreshDevState()
+  } catch (e) { updateStatus.textContent = 'error' }
 })
-
-updateInfoBtn.addEventListener('mouseenter', (e) => {
-  updateTooltip.style.display = 'block'
-  const r = updateInfoBtn.getBoundingClientRect()
-  updateTooltip.style.left = (r.left - 300) + 'px'
-  updateTooltip.style.top = (r.bottom + 8) + 'px'
-})
-updateInfoBtn.addEventListener('mouseleave', () => { updateTooltip.style.display = 'none' })
-
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (devOverlay.style.display === 'flex') closeDevMenu() } })
 document.addEventListener('click', async function resumeAudio(e) {
   try {

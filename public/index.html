@@ -12,8 +12,9 @@ html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,A
 #viewport{flex:1;display:flex;align-items:stretch;justify-content:stretch;background:#000}
 canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
 .info{color:#cbd5e1;font-size:13px;margin-left:8px}
-.dev-overlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(3,7,12,0.85);display:none;align-items:center;justify-content:center;z-index:9999}
-.dev-panel{width:760px;max-width:98%;max-height:90%;overflow:auto;background:#061021;border-radius:10px;padding:18px;border:1px solid #123}
+.dev-button{position:fixed;right:12px;top:12px;background:#0b84ff;color:#000;padding:6px 8px;border-radius:6px;cursor:pointer;z-index:9999;font-weight:700}
+.dev-overlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(3,7,12,0.85);display:none;align-items:center;justify-content:center;z-index:9998}
+.dev-panel{width:720px;max-width:95%;max-height:90%;overflow:auto;background:#061021;border-radius:10px;padding:18px;border:1px solid #123}
 .dev-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .dev-section{background:#05101a;padding:10px;border-radius:8px;border:1px solid #0b2430;color:#dbe}
 .small{font-size:12px;color:#9cb}
@@ -23,15 +24,14 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
 .export-progress-wrap{margin-top:10px;background:#02121a;padding:8px;border-radius:6px;border:1px solid #083043;display:none;gap:8px;align-items:center}
 .export-bar{width:100%;height:12px;background:#05212a;border-radius:6px;overflow:hidden;position:relative}
 .export-bar-inner{height:100%;width:0%;background:#0b84ff;transition:width 120ms linear}
+.export-progress-meta{font-size:12px;color:#9cb;min-width:160px;margin-left:8px;text-align:right}
 .import-progress-wrap{margin-top:10px;background:#02121a;padding:8px;border-radius:6px;border:1px solid #083043;display:none;gap:8px;align-items:center}
 .import-bar{width:100%;height:12px;background:#05212a;border-radius:6px;overflow:hidden;position:relative}
 .import-bar-inner{height:100%;width:0%;background:#0bf58b;transition:width 120ms linear}
+.import-progress-meta{font-size:12px;color:#9cb;min-width:160px;margin-left:8px;text-align:right}
 .range{width:100%}
-#devQuickBtn{position:fixed;right:12px;top:54px;background:#0b84ff;color:#012;border-radius:8px;padding:6px 8px;border:0;cursor:pointer;z-index:9998}
-.version-box{display:flex;align-items:center;gap:8px;justify-content:space-between}
-.version-left{display:flex;gap:8px;align-items:center}
-.info-bubble{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#123;color:#9fe;font-weight:700;cursor:pointer}
-.update-status{font-size:13px;color:#9cb}
+.info-circle{display:inline-block;width:18px;height:18px;border-radius:50%;background:#0b84ff;color:#000;text-align:center;line-height:18px;font-weight:700;margin-left:8px;cursor:pointer}
+.tooltip{position:absolute;background:#0d1820;border:1px solid #123;padding:8px;border-radius:6px;color:#bfe;max-width:320px;display:none;z-index:10000}
 </style>
 </head>
 <body>
@@ -40,41 +40,27 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
   <button id="go">Go</button>
   <div class="info" id="status">connecting...</div>
 </div>
-<button id="devQuickBtn">Dev</button>
 <div id="container">
   <div id="viewport">
     <canvas id="screen" width="1280" height="800"></canvas>
   </div>
 </div>
+<button class="dev-button" id="openDev">Dev</button>
 <div class="dev-overlay" id="devOverlay" aria-hidden="true">
   <div class="dev-panel" role="dialog" aria-modal="true" aria-label="Dev Menu">
     <button class="dev-close" id="devClose">✕</button>
-    <h2>Dev Menu</h2>
+    <h2>Dev Menu <span class="small" style="margin-left:12px" id="currentVersionLabel"></span></h2>
     <div class="dev-grid">
       <div class="dev-section">
-        <div class="version-box">
-          <div class="version-left">
-            <div><strong>Version</strong><div class="small">current code channel and revision</div></div>
-            <div style="margin-left:8px" id="versionBadge" class="small">loading…</div>
-            <div style="margin-left:8px" id="versionInfo" class="update-status"></div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <div class="small">Channel</div>
-            <label><input type="radio" name="channel" value="stable" id="chanStable" /> stable</label>
-            <label><input type="radio" name="channel" value="unstable" id="chanUnstable" /> unstable</label>
-            <div class="info-bubble" id="chanInfo">i</div>
-          </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>Server Info</strong><div class="small">what this is running on</div></div>
+          <div id="devStatusBadge" class="small">loading...</div>
         </div>
-        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-          <button id="checkUpdatesBtn">Check updates</button>
-          <button id="applyUpdateBtn" disabled>Apply update</button>
-          <div id="checkResult" class="small" style="margin-left:8px"></div>
-        </div>
-        <div style="margin-top:12px" class="code" id="devServerInfo" aria-live="polite"></div>
+        <div class="code" id="devServerInfo" style="margin-top:10px;max-height:200px"></div>
       </div>
       <div class="dev-section">
-        <strong>Import / Export</strong>
-        <div class="small">export current profile or import (.tar.gz)</div>
+        <strong>Import / Export & Updates</strong>
+        <div class="small">export profile, import (.tar.gz), or update code</div>
         <div style="margin-top:8px" class="dev-actions">
           <button id="devExportBtn">Export (min)</button>
           <button id="devExportFullBtn">Export (full)</button>
@@ -82,7 +68,20 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
             <input id="devImportFile" type="file" accept=".zip,.tar.gz,.tgz" />
             <button id="devImportBtn">Import</button>
           </label>
-          <div id="devImportStatus" class="small" style="margin-left:8px"></div>
+        </div>
+        <div style="margin-top:10px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="small">Channel</label>
+            <select id="updateChannel">
+              <option value="stable">stable</option>
+              <option value="unstable">unstable</option>
+            </select>
+            <button id="checkUpdatesBtn">Check updates</button>
+            <button id="applyUpdateBtn">Apply update</button>
+            <button id="downloadUpdateBtn">Download tarball</button>
+            <div class="info-circle" id="updateInfoBtn">i</div>
+          </div>
+          <div id="updateStatus" class="small" style="margin-top:8px"></div>
         </div>
         <div class="export-progress-wrap" id="exportProgressWrap" role="status" aria-hidden="true">
           <div class="export-bar"><div class="export-bar-inner" id="exportBarInner"></div></div>
@@ -111,99 +110,389 @@ canvas{width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
     </div>
   </div>
 </div>
+<div class="tooltip" id="updateTooltip">stable: uses GitHub releases/latest (safer). unstable: uses latest commit tarball (more frequent, riskier).</div>
 <script>
-const canvas=document.getElementById('screen')
-const ctx=canvas.getContext('2d')
-ctx.imageSmoothingEnabled=true
-const addressEl=document.getElementById('address')
-const goBtn=document.getElementById('go')
-const statusEl=document.getElementById('status')
+const canvas = document.getElementById('screen')
+const ctx = canvas.getContext('2d')
+ctx.imageSmoothingEnabled = true
+const addressEl = document.getElementById('address')
+const goBtn = document.getElementById('go')
+const statusEl = document.getElementById('status')
 let ws
-let audioWs
-let connId=null
-let frameBusy=false
-function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.binaryType='arraybuffer';ws.addEventListener('open',()=>{statusEl.textContent='connected'});ws.addEventListener('message',handleMessageWrapper);ws.addEventListener('close',()=>{statusEl.textContent='disconnected — reconnecting...';setTimeout(connect,1000)});ws.addEventListener('error',()=>{statusEl.textContent='ws error'})}
-connect()
-async function handleMessage(ev){try{if(typeof ev.data==='string'||ev.data instanceof String){const data=JSON.parse(ev.data);if(data.type==='init'){canvas.width=data.width||canvas.width;canvas.height=data.height||canvas.height;connId=data.connId;fitCanvas()}else if(data.type==='file-request'){fileInput.click()}else if(data.type==='navigated'){statusEl.textContent='navigated: '+data.url;setTimeout(()=>statusEl.textContent='connected',2000)}else if(data.type==='server-shutdown'){try{window.open('','_self').close()}catch(e){}try{location.href='about:blank'}catch(e){}try{document.body.innerHTML='<div style=\"color:#fff;padding:20px;font-family:monospace\">Server shutting down…</div>'}catch(e){}}else if(data.type==='export-start'||data.type==='export-progress'||data.type==='export-complete'||data.type==='import-start'||data.type==='import-progress'||data.type==='import-extracted'||data.type==='import-finish'||data.type==='import-error'){handleDevWsMessage(data)}}else{if(frameBusy)return;frameBusy=true;try{const arr=ev.data;const blob=new Blob([arr],{type:'image/jpeg'});const bitmap=await createImageBitmap(blob);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close()}catch(e){console.warn('frame render err',e)}finally{frameBusy=false}}}catch(err){console.warn(err);frameBusy=false}}
-function send(msg){if(!connId&&msg.type!=='init')msg.connId=connId;const txt=JSON.stringify(msg);if(!ws||ws.readyState!==WebSocket.OPEN)setTimeout(()=>{try{if(ws&&ws.readyState===WebSocket.OPEN)ws.send(txt)}catch(e){}},200);else ws.send(txt)}
-function fitCanvas(){const topBarH=document.getElementById('topbar').clientHeight;const cw=window.innerWidth;const ch=window.innerHeight-topBarH;canvas.style.width=cw+'px';canvas.style.height=ch+'px'}
-window.addEventListener('resize',fitCanvas)
-let lastMouse={x:Math.floor(640),y:Math.floor(400)}
-let mouseDirty=false
-canvas.addEventListener('mousemove',(e)=>{const rect=canvas.getBoundingClientRect();const x=(e.clientX-rect.left)*(canvas.width/rect.width);const y=(e.clientY-rect.top)*(canvas.height/rect.height);lastMouse={x:Math.max(0,Math.min(canvas.width-1,Math.round(x))),y:Math.max(0,Math.min(canvas.height-1,Math.round(y)))};mouseDirty=true;if(!window.__mouseSenderScheduled){window.__mouseSenderScheduled=true;requestAnimationFrame(function frame(){if(!mouseDirty){window.__mouseSenderScheduled=false;return}mouseDirty=false;send({type:'mouse',action:'move',x:lastMouse.x,y:lastMouse.y});window.__mouseSenderScheduled=false})}})
-canvas.addEventListener('mousedown',(e)=>{const rect=canvas.getBoundingClientRect();const x=(e.clientX-rect.left)*(canvas.width/rect.width);const y=(e.clientY-rect.top)*(canvas.height/rect.height);const px=Math.max(0,Math.min(canvas.width-1,Math.round(x)));const py=Math.max(0,Math.min(canvas.height-1,Math.round(y)));send({type:'mouse',action:'down',x:px,y:py,button:'left'})})
-canvas.addEventListener('mouseup',(e)=>{const rect=canvas.getBoundingClientRect();const x=(e.clientX-rect.left)*(canvas.width/rect.width);const y=(e.clientY-rect.top)*(canvas.height/rect.height);const px=Math.max(0,Math.min(canvas.width-1,Math.round(x)));const py=Math.max(0,Math.min(canvas.height-1,Math.round(y)));send({type:'mouse',action:'up',x:px,y:py,button:'left'})})
-canvas.addEventListener('dblclick',(e)=>{const rect=canvas.getBoundingClientRect();const x=(e.clientX-rect.left)*(canvas.width/rect.width);const y=(e.clientY-rect.top)*(canvas.height/rect.height);const px=Math.max(0,Math.min(canvas.width-1,Math.round(x)));const py=Math.max(0,Math.min(canvas.height-1,Math.round(y)));send({type:'mouse',action:'click',x:px,y:py,button:'left',clickCount:2})})
-canvas.addEventListener('wheel',(e)=>{e.preventDefault();const rect=canvas.getBoundingClientRect();const x=(e.clientX-rect.left)*(canvas.width/rect.width);const y=(e.clientY-rect.top)*(canvas.height/rect.height);const deltaX=Math.round(e.deltaX);const deltaY=Math.round(e.deltaY);send({type:'scroll',deltaX,deltaY,x:Math.round(x),y:Math.round(y)})},{passive:false})
-window.addEventListener('keydown',(e)=>{if(e.key==='F5'||(e.ctrlKey&&e.key==='r')){e.preventDefault();return}if(e.repeat)return;if(e.key.length===1)send({type:'keyboard',action:'press',key:e.key});else{send({type:'keyboard',action:'down',key:e.key});e.preventDefault()}})
-window.addEventListener('keyup',(e)=>{if(e.key.length===1)return;send({type:'keyboard',action:'up',key:e.key})})
-goBtn.addEventListener('click',()=>{const url=addressEl.value.trim();if(!url)return;if(url==='dev'){openDevMenu();return}const u=(url.startsWith('http://')||url.startsWith('https://'))?url:('https://'+url);send({type:'navigate',url:u})})
-addressEl.addEventListener('keydown',(e)=>{if(e.key==='Enter')goBtn.click()})
-const fileInput=document.createElement('input')
-fileInput.type='file'
-fileInput.style.display='none'
-fileInput.addEventListener('change',async(ev)=>{const file=ev.target.files[0];if(!file)return;const form=new FormData();form.append('file',file);try{const resp=await fetch('/upload',{method:'POST',body:form});const j=await resp.json();if(!j.ok)alert('Upload failed: '+(j.message||'unknown'));else alert('Upload sent to remote page')}catch(e){alert('Upload error: '+e)}fileInput.value=''})
-document.body.appendChild(fileInput)
-const devOverlay=document.getElementById('devOverlay')
-const devClose=document.getElementById('devClose')
-const devCloseBtn=document.getElementById('devCloseBtn')
-const devRefresh=document.getElementById('devRefresh')
-const devServerInfo=document.getElementById('devServerInfo')
-const devImportFile=document.getElementById('devImportFile')
-const devImportBtn=document.getElementById('devImportBtn')
-const devExportBtn=document.getElementById('devExportBtn')
-const devExportFullBtn=document.getElementById('devExportFullBtn')
-const devImportStatus=document.getElementById('devImportStatus')
-const exportProgressWrap=document.getElementById('exportProgressWrap')
-const exportBarInner=document.getElementById('exportBarInner')
-const exportProgressMeta=document.getElementById('exportProgressMeta')
-const importProgressWrap=document.getElementById('importProgressWrap')
-const importBarInner=document.getElementById('importBarInner')
-const importProgressMeta=document.getElementById('importProgressMeta')
-const qualityRange=document.getElementById('qualityRange')
-const qualityValue=document.getElementById('qualityValue')
-const setQualityBtn=document.getElementById('setQualityBtn')
-const checkUpdatesBtn=document.getElementById('checkUpdatesBtn')
-const applyUpdateBtn=document.getElementById('applyUpdateBtn')
-const versionBadge=document.getElementById('versionBadge')
-const versionInfo=document.getElementById('versionInfo')
-const chanStable=document.getElementById('chanStable')
-const chanUnstable=document.getElementById('chanUnstable')
-const chanInfo=document.getElementById('chanInfo')
-const checkResult=document.getElementById('checkResult')
-const devQuickBtn=document.getElementById('devQuickBtn')
-devQuickBtn.addEventListener('click',openDevMenu)
-function openDevMenu(){devOverlay.style.display='flex';devOverlay.setAttribute('aria-hidden','false');refreshDevState()}
-function closeDevMenu(){devOverlay.style.display='none';devOverlay.setAttribute('aria-hidden','true')}
-devClose.addEventListener('click',closeDevMenu)
-devCloseBtn.addEventListener('click',closeDevMenu)
-devRefresh.addEventListener('click',refreshDevState)
-function refreshDevState(){devServerInfo.textContent='loading...';fetch('/dev/state').then(r=>r.json()).then(j=>{if(!j.ok){devServerInfo.textContent='error';return}const s=j.stats;devServerInfo.textContent=JSON.stringify({pid:s.pid,userDataDir:s.userDataDir,platform:s.platform,arch:s.arch,uptime_s:Math.round(s.uptime),jpegQuality:s.jpegQuality||60},null,2);qualityRange.value=s.jpegQuality||60;qualityValue.textContent=qualityRange.value;loadUpdateConfig()}).catch(e=>{devServerInfo.textContent='error: '+String(e)})
+let connId = null
+let frameBusy = false
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws')
+  ws.binaryType = 'arraybuffer'
+  ws.addEventListener('open', () => { statusEl.textContent = 'connected' })
+  ws.addEventListener('message', handleMessageWrapper)
+  ws.addEventListener('close', () => { statusEl.textContent = 'disconnected — reconnecting...'; setTimeout(connect, 1000) })
+  ws.addEventListener('error', () => { statusEl.textContent = 'ws error' })
 }
-function loadUpdateConfig(){fetch('/dev/check-updates?local=1').then(r=>r.json()).then(j=>{if(!j.ok){versionBadge.textContent='?';versionInfo.textContent='error'}else{versionBadge.textContent=(j.currentChannel||'?')+' / '+(j.currentVersion?j.currentVersion.slice(0,8):'unknown');versionInfo.textContent=j.info||'';if(j.currentChannel==='stable')chanStable.checked=true;else chanUnstable.checked=true}}).catch(()=>{versionBadge.textContent='?'})}
-chanInfo.addEventListener('click',()=>{alert('stable: less frequent, lower-risk updates\\nunstable: more frequent, may be buggy')})
-checkUpdatesBtn.addEventListener('click',async()=>{checkResult.textContent='checking...';applyUpdateBtn.disabled=true;try{const channel=(chanStable.checked?'stable':'unstable');const r=await fetch('/dev/check-updates?channel='+encodeURIComponent(channel));const j=await r.json();if(!j.ok){checkResult.textContent='error'}else{if(j.updateAvailable){checkResult.textContent='update available: '+(j.latestVersion||'unknown');applyUpdateBtn.disabled=false}else checkResult.textContent='up to date';versionBadge.textContent=(j.currentChannel||'?')+' / '+(j.currentVersion?j.currentVersion.slice(0,8):'unknown');versionInfo.textContent='latest: '+(j.latestVersion?j.latestVersion.slice(0,8):'unknown')+' '+(j.latestMessage||'')}}}catch(e){checkResult.textContent='error'} })
-applyUpdateBtn.addEventListener('click',async()=>{if(!confirm('Apply update now? This will overwrite server.js, public/index.html, package.json, install-deps.sh (backups made). You will need to run npm install and restart server. Continue?'))return;applyUpdateBtn.disabled=true;checkResult.textContent='applying update...';try{const channel=(chanStable.checked?'stable':'unstable');const r=await fetch('/dev/apply-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel})});const j=await r.json();if(!j.ok){checkResult.textContent='apply failed: '+(j.message||'unknown');applyUpdateBtn.disabled=false}else{checkResult.textContent='apply complete: '+(j.message||'');setTimeout(()=>location.reload(),1200)}}catch(e){checkResult.textContent='error';applyUpdateBtn.disabled=false}})
-function showExportProgress(){exportProgressWrap.style.display='flex';exportBarInner.style.width='2%';exportProgressMeta.textContent='starting...'}
-function hideExportProgress(){exportProgressWrap.style.display='none';exportBarInner.style.width='0%';exportProgressMeta.textContent=''}
-function showImportProgress(){importProgressWrap.style.display='flex';importBarInner.style.width='2%';importProgressMeta.textContent='starting...'}
-function hideImportProgress(){importProgressWrap.style.display='none';importBarInner.style.width='0%';importProgressMeta.textContent=''}
-function handleDevWsMessage(data){if(!data||!data.type)return;if(data.type==='export-start'){showExportProgress();exportProgressMeta.textContent=`Preparing export (${data.filename})`}else if(data.type==='export-progress'){const bytes=Number(data.processedBytes||0);const cap=200*1024*1024;const pct=Math.min(100,Math.round((bytes/cap)*100));exportBarInner.style.width=(pct<2?2:pct)+'%';exportProgressMeta.textContent=`${(bytes/1024/1024).toFixed(2)} MB`}else if(data.type==='export-complete'){exportBarInner.style.width='100%';exportProgressMeta.textContent='pack complete — downloading';setTimeout(()=>hideExportProgress(),1200)}else if(data.type==='import-start'){showImportProgress();importProgressMeta.textContent=`Importing ${data.name}…`}else if(data.type==='import-progress'){const entries=Number(data.entriesProcessed||0);const cap=5000;const pct=Math.min(100,Math.round((entries/cap)*100));importBarInner.style.width=(pct<2?2:pct)+'%';importProgressMeta.textContent=`${entries} entries processed • ${data.name||''}`}else if(data.type==='import-extracted'){importBarInner.style.width='80%';importProgressMeta.textContent=`${data.entries} entries extracted`}else if(data.type==='import-finish'){importBarInner.style.width='100%';importProgressMeta.textContent=data.message||'import complete';setTimeout(()=>hideImportProgress(),1200)}else if(data.type==='import-error'){importBarInner.style.width='100%';importProgressMeta.textContent='import error: '+(data.message||'');setTimeout(()=>hideImportProgress(),1800)}}
-function handleMessageWrapper(ev){try{if(typeof ev.data==='string'||ev.data instanceof String){const data=JSON.parse(ev.data);handleDevWsMessage(data);handleMessage(ev)}else handleMessage(ev)}catch(e){console.warn(e);handleMessage(ev)}}
-devExportBtn.addEventListener('click',async()=>{devImportStatus.textContent='starting export...';showExportProgress();try{const resp=await fetch('/dev/export?full=0');if(!resp.ok){devImportStatus.textContent='export failed';hideExportProgress();return}const blob=await resp.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='exported_profile_min.tar.gz';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);devImportStatus.textContent='export complete';hideExportProgress()}catch(e){devImportStatus.textContent='export error';hideExportProgress()}})
-devExportFullBtn.addEventListener('click',async()=>{devImportStatus.textContent='starting full export...';showExportProgress();try{const resp=await fetch('/dev/export?full=1');if(!resp.ok){devImportStatus.textContent='export failed';hideExportProgress();return}const blob=await resp.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='exported_profile_full.tar.gz';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);devImportStatus.textContent='full export complete';hideExportProgress()}catch(e){devImportStatus.textContent='export error';hideExportProgress()}})
-devImportBtn.addEventListener('click',async()=>{const f=devImportFile.files[0];if(!f){devImportStatus.textContent='select a .zip/.tar.gz first';return}devImportStatus.textContent='uploading...';showImportProgress();const fd=new FormData();fd.append('file',f);try{const r=await fetch('/dev/import',{method:'POST',body:fd});const j=await r.json();if(j&&j.ok){devImportStatus.textContent='import successful: '+(j.message||'');setTimeout(()=>location.reload(),1200)}else{devImportStatus.textContent='import failed: '+(j&&j.message?j.message:'unknown');hideImportProgress()}}catch(e){devImportStatus.textContent='import error';hideImportProgress()}})
-qualityRange.addEventListener('input',()=>{qualityValue.textContent=qualityRange.value})
-setQualityBtn.addEventListener('click',async()=>{const q=Number(qualityRange.value);try{const r=await fetch('/dev/set-quality',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q})});const j=await r.json();if(j&&j.ok){devImportStatus.textContent='quality updated: '+j.quality}else devImportStatus.textContent='failed to update quality'}catch(e){devImportStatus.textContent='error updating quality'}})
-window.addEventListener('keydown',(e)=>{if(e.key==='Escape'){if(devOverlay.style.display==='flex')closeDevMenu()}})
-document.addEventListener('click',async function resumeAudio(e){try{if(window.__audioCtx&&window.__audioCtx.state==='suspended')await window.__audioCtx.resume()}catch(e){}document.removeEventListener('click',resumeAudio)})
-let pendingAudioBuf=null
-let audioCtx=null
-let audioScheduledTime=0
-const audioSampleRate=48000
-function connectAudio(){audioWs=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/audio');audioWs.binaryType='arraybuffer';audioWs.addEventListener('open',()=>{});audioWs.addEventListener('message',onAudioMessage);audioWs.addEventListener('close',()=>{setTimeout(connectAudio,1000)})}
-connectAudio()
-async function onAudioMessage(ev){try{let chunk=ev.data;if(!(chunk instanceof ArrayBuffer))return;let newBuf=chunk;if(pendingAudioBuf){const a=new Uint8Array(pendingAudioBuf);const b=new Uint8Array(newBuf);const c=new Uint8Array(a.length+b.length);c.set(a,0);c.set(b,a.length);newBuf=c.buffer;pendingAudioBuf=null}if(newBuf.byteLength%2===1){pendingAudioBuf=newBuf.slice(newBuf.byteLength-1);newBuf=newBuf.slice(0,newBuf.byteLength-1)}if(!newBuf||newBuf.byteLength===0)return;if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:audioSampleRate});const int16=new Int16Array(newBuf);const float32=new Float32Array(int16.length);for(let i=0;i<int16.length;i++)float32[i]=int16[i]/32768;const buffer=audioCtx.createBuffer(1,float32.length,audioSampleRate);buffer.getChannelData(0).set(float32);const src=audioCtx.createBufferSource();src.buffer=buffer;src.connect(audioCtx.destination);const now=audioCtx.currentTime;if(!audioScheduledTime||audioScheduledTime<now)audioScheduledTime=now+0.05;src.start(audioScheduledTime);audioScheduledTime+=buffer.duration}catch(e){}}
+connect()
+async function handleMessage(ev) {
+  try {
+    if (typeof ev.data === 'string' || ev.data instanceof String) {
+      const data = JSON.parse(ev.data)
+      if (data.type === 'init') {
+        canvas.width = data.width || canvas.width
+        canvas.height = data.height || canvas.height
+        connId = data.connId
+        fitCanvas()
+      } else if (data.type === 'file-request') {
+        const fi = document.getElementById('devImportFile')
+        fi && fi.click()
+      } else if (data.type === 'navigated') {
+        statusEl.textContent = 'navigated: ' + data.url
+        setTimeout(() => statusEl.textContent = 'connected', 2000)
+      } else if (data.type === 'server-shutdown') {
+        try { window.open('','_self').close() } catch (e) {}
+        try { location.href = 'about:blank' } catch (e) {}
+        try { document.body.innerHTML = '<div style="color:#fff;padding:20px;font-family:monospace">Server shutting down…</div>' } catch (e) {}
+      } else if (data.type && data.type.startsWith('export') || data.type && data.type.startsWith('import')) {
+        handleDevWsMessage(data)
+      }
+    } else {
+      if (frameBusy) return
+      frameBusy = true
+      try {
+        const arr = ev.data
+        const blob = new Blob([arr], { type: 'image/jpeg' })
+        const bitmap = await createImageBitmap(blob)
+        ctx.clearRect(0,0,canvas.width,canvas.height)
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+        bitmap.close()
+      } catch (e) { console.warn('frame render err', e) } finally { frameBusy = false }
+    }
+  } catch (err) { console.warn(err); frameBusy = false }
+}
+function send(msg) {
+  if (!connId && msg.type !== 'init') msg.connId = connId
+  const txt = JSON.stringify(msg)
+  if (!ws || ws.readyState !== WebSocket.OPEN) setTimeout(() => { try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(txt) } catch (e) {} }, 200)
+  else ws.send(txt)
+}
+function fitCanvas() {
+  const topBarH = document.getElementById('topbar').clientHeight
+  const cw = window.innerWidth
+  const ch = window.innerHeight - topBarH
+  canvas.style.width = cw + 'px'
+  canvas.style.height = ch + 'px'
+}
+window.addEventListener('resize', fitCanvas)
+let lastMouse = { x: Math.floor(640), y: Math.floor(400) }
+let mouseDirty = false
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height)
+  lastMouse = { x: Math.max(0, Math.min(canvas.width - 1, Math.round(x))), y: Math.max(0, Math.min(canvas.height - 1, Math.round(y))) }
+  mouseDirty = true
+  if (!window.__mouseSenderScheduled) {
+    window.__mouseSenderScheduled = true
+    requestAnimationFrame(function frame() {
+      if (!mouseDirty) { window.__mouseSenderScheduled = false; return }
+      mouseDirty = false
+      send({ type: 'mouse', action: 'move', x: lastMouse.x, y: lastMouse.y })
+      window.__mouseSenderScheduled = false
+    })
+  }
+})
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height)
+  const px = Math.max(0, Math.min(canvas.width - 1, Math.round(x)))
+  const py = Math.max(0, Math.min(canvas.height - 1, Math.round(y)))
+  send({ type: 'mouse', action: 'down', x: px, y: py, button: 'left' })
+})
+canvas.addEventListener('mouseup', (e) => {
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height)
+  const px = Math.max(0, Math.min(canvas.width - 1, Math.round(x)))
+  const py = Math.max(0, Math.min(canvas.height - 1, Math.round(y)))
+  send({ type: 'mouse', action: 'up', x: px, y: py, button: 'left' })
+})
+canvas.addEventListener('dblclick', (e) => {
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height)
+  const px = Math.max(0, Math.min(canvas.width - 1, Math.round(x)))
+  const py = Math.max(0, Math.min(canvas.height - 1, Math.round(y)))
+  send({ type: 'mouse', action: 'click', x: px, y: py, button: 'left', clickCount: 2 })
+})
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault()
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height)
+  const deltaX = Math.round(e.deltaX)
+  const deltaY = Math.round(e.deltaY)
+  send({ type: 'scroll', deltaX, deltaY, x: Math.round(x), y: Math.round(y) })
+}, { passive: false })
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) { e.preventDefault(); return }
+  if (e.repeat) return
+  if (e.key.length === 1) send({ type: 'keyboard', action: 'press', key: e.key })
+  else { send({ type: 'keyboard', action: 'down', key: e.key }); e.preventDefault() }
+})
+window.addEventListener('keyup', (e) => { if (e.key.length === 1) return; send({ type: 'keyboard', action: 'up', key: e.key }) })
+goBtn.addEventListener('click', () => {
+  const url = addressEl.value.trim()
+  if (!url) return
+  if (url === 'dev') { openDevMenu(); return }
+  const u = (url.startsWith('http://') || url.startsWith('https://')) ? url : ('https://' + url)
+  send({ type: 'navigate', url: u })
+})
+addressEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') goBtn.click() })
+const fileInput = document.createElement('input')
+fileInput.type = 'file'
+fileInput.style.display = 'none'
+fileInput.addEventListener('change', async (ev) => {
+  const file = ev.target.files[0]
+  if (!file) return
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const resp = await fetch('/upload', { method: 'POST', body: form })
+    const j = await resp.json()
+    if (!j.ok) alert('Upload failed: ' + (j.message || 'unknown'))
+    else alert('Upload sent to remote page')
+  } catch (e) { alert('Upload error: ' + e) }
+  fileInput.value = ''
+})
+document.body.appendChild(fileInput)
+
+const devOverlay = document.getElementById('devOverlay')
+const openDev = document.getElementById('openDev')
+const devClose = document.getElementById('devClose')
+const devCloseBtn = document.getElementById('devCloseBtn')
+const devRefresh = document.getElementById('devRefresh')
+const devServerInfo = document.getElementById('devServerInfo')
+const devImportFile = document.getElementById('devImportFile')
+const devImportBtn = document.getElementById('devImportBtn')
+const devExportBtn = document.getElementById('devExportBtn')
+const devExportFullBtn = document.getElementById('devExportFullBtn')
+const devImportStatus = document.getElementById('devImportStatus')
+const exportProgressWrap = document.getElementById('exportProgressWrap')
+const exportBarInner = document.getElementById('exportBarInner')
+const exportProgressMeta = document.getElementById('exportProgressMeta')
+const importProgressWrap = document.getElementById('importProgressWrap')
+const importBarInner = document.getElementById('importBarInner')
+const importProgressMeta = document.getElementById('importProgressMeta')
+const qualityRange = document.getElementById('qualityRange')
+const qualityValue = document.getElementById('qualityValue')
+const setQualityBtn = document.getElementById('setQualityBtn')
+const updateChannel = document.getElementById('updateChannel')
+const checkUpdatesBtn = document.getElementById('checkUpdatesBtn')
+const applyUpdateBtn = document.getElementById('applyUpdateBtn')
+const updateStatus = document.getElementById('updateStatus')
+const downloadUpdateBtn = document.getElementById('downloadUpdateBtn')
+const updateInfoBtn = document.getElementById('updateInfoBtn')
+const updateTooltip = document.getElementById('updateTooltip')
+const currentVersionLabel = document.getElementById('currentVersionLabel')
+
+function openDevMenu() { devOverlay.style.display = 'flex'; devOverlay.setAttribute('aria-hidden', 'false'); refreshDevState() }
+function closeDevMenu() { devOverlay.style.display = 'none'; devOverlay.setAttribute('aria-hidden', 'true') }
+openDev.addEventListener('click', openDevMenu)
+devClose.addEventListener('click', closeDevMenu)
+devCloseBtn.addEventListener('click', closeDevMenu)
+devRefresh.addEventListener('click', refreshDevState)
+
+function refreshDevState() {
+  devServerInfo.textContent = 'loading...'
+  devImportStatus.textContent = ''
+  fetch('/dev/state').then(r => r.json()).then(j => {
+    if (!j.ok) { devServerInfo.textContent = 'error'; return }
+    const s = j.stats
+    devServerInfo.textContent = JSON.stringify({ pid: s.pid, userDataDir: s.userDataDir, platform: s.platform, arch: s.arch, uptime_s: Math.round(s.uptime), jpegQuality: s.jpegQuality || 60 }, null, 2)
+    qualityRange.value = s.jpegQuality || 60
+    qualityValue.textContent = qualityRange.value
+    fetch('/dev/version').then(r => r.json()).then(jv => {
+      if (jv && jv.ok) {
+        const st = jv.stable || {}
+        const un = jv.unstable || {}
+        currentVersionLabel.textContent = `stable:${st.currentVersion || 'n/a'} unstable:${un.currentVersion || 'n/a'}`
+      }
+    }).catch(()=>{})
+  }).catch(e => { devServerInfo.textContent = 'error: ' + String(e) })
+}
+
+function showExportProgress() { exportProgressWrap.style.display = 'flex'; exportBarInner.style.width = '2%'; exportProgressMeta.textContent = 'starting...' }
+function hideExportProgress() { exportProgressWrap.style.display = 'none'; exportBarInner.style.width = '0%'; exportProgressMeta.textContent = '' }
+function showImportProgress() { importProgressWrap.style.display = 'flex'; importBarInner.style.width = '2%'; importProgressMeta.textContent = 'starting...' }
+function hideImportProgress() { importProgressWrap.style.display = 'none'; importBarInner.style.width = '0%'; importProgressMeta.textContent = '' }
+
+function handleDevWsMessage(data) {
+  if (!data || !data.type) return
+  if (data.type === 'export-start') { showExportProgress(); exportProgressMeta.textContent = `Preparing export (${data.filename})` }
+  else if (data.type === 'export-progress') {
+    const bytes = Number(data.processedBytes || 0)
+    const cap = 200 * 1024 * 1024
+    const pct = Math.min(100, Math.round((bytes / cap) * 100))
+    exportBarInner.style.width = (pct < 2 ? 2 : pct) + '%'
+    exportProgressMeta.textContent = `${(bytes/1024/1024).toFixed(2)} MB`
+  } else if (data.type === 'export-complete') { exportBarInner.style.width = '100%'; exportProgressMeta.textContent = 'pack complete — downloading'; setTimeout(() => hideExportProgress(), 1200) }
+  else if (data.type === 'import-start') { showImportProgress(); importProgressMeta.textContent = `Importing ${data.name}…` }
+  else if (data.type === 'import-progress') {
+    const entries = Number(data.entriesProcessed || 0)
+    const cap = 5000
+    const pct = Math.min(100, Math.round((entries / cap) * 100))
+    importBarInner.style.width = (pct < 2 ? 2 : pct) + '%'
+    importProgressMeta.textContent = `${entries} entries processed • ${data.name || ''}`
+  } else if (data.type === 'import-extracted') { importBarInner.style.width = '80%'; importProgressMeta.textContent = `${data.entries} entries extracted` }
+  else if (data.type === 'import-finish') { importBarInner.style.width = '100%'; importProgressMeta.textContent = data.message || 'import complete'; setTimeout(() => hideImportProgress(), 1200) }
+  else if (data.type === 'import-error') { importBarInner.style.width = '100%'; importProgressMeta.textContent = 'import error: ' + (data.message || ''); setTimeout(() => hideImportProgress(), 1800) }
+}
+
+function handleMessageWrapper(ev) {
+  try {
+    if (typeof ev.data === 'string' || ev.data instanceof String) {
+      const data = JSON.parse(ev.data)
+      handleDevWsMessage(data)
+      handleMessage(ev)
+    } else handleMessage(ev)
+  } catch (e) { console.warn(e); handleMessage(ev) }
+}
+
+devExportBtn.addEventListener('click', async () => {
+  devImportStatus.textContent = 'starting export...'
+  showExportProgress()
+  try {
+    const resp = await fetch('/dev/export?full=0')
+    if (!resp.ok) { devImportStatus.textContent = 'export failed'; hideExportProgress(); return }
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'exported_profile_min.tar.gz'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    devImportStatus.textContent = 'export complete'
+    hideExportProgress()
+  } catch (e) { devImportStatus.textContent = 'export error'; hideExportProgress() }
+})
+devExportFullBtn.addEventListener('click', async () => {
+  devImportStatus.textContent = 'starting full export...'
+  showExportProgress()
+  try {
+    const resp = await fetch('/dev/export?full=1')
+    if (!resp.ok) { devImportStatus.textContent = 'export failed'; hideExportProgress(); return }
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'exported_profile_full.tar.gz'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    devImportStatus.textContent = 'full export complete'
+    hideExportProgress()
+  } catch (e) { devImportStatus.textContent = 'export error'; hideExportProgress() }
+})
+
+devImportBtn.addEventListener('click', async () => {
+  const f = devImportFile.files[0]
+  if (!f) { devImportStatus.textContent = 'select a .zip/.tar.gz first'; return }
+  devImportStatus.textContent = 'uploading...'
+  showImportProgress()
+  const fd = new FormData()
+  fd.append('file', f)
+  try {
+    const r = await fetch('/dev/import', { method: 'POST', body: fd })
+    const j = await r.json()
+    if (j && j.ok) {
+      devImportStatus.textContent = 'import successful: ' + (j.message || '')
+      setTimeout(() => location.reload(), 1200)
+    } else {
+      devImportStatus.textContent = 'import failed: ' + (j && j.message ? j.message : 'unknown')
+      hideImportProgress()
+    }
+  } catch (e) { devImportStatus.textContent = 'import error'; hideImportProgress() }
+})
+
+qualityRange.addEventListener('input', () => { qualityValue.textContent = qualityRange.value })
+setQualityBtn.addEventListener('click', async () => {
+  const q = Number(qualityRange.value)
+  try {
+    const r = await fetch('/dev/set-quality', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quality: q }) })
+    const j = await r.json()
+    if (j && j.ok) {
+      devImportStatus.textContent = 'quality updated: ' + j.quality
+    } else devImportStatus.textContent = 'failed to update quality'
+  } catch (e) { devImportStatus.textContent = 'error updating quality' }
+})
+
+checkUpdatesBtn.addEventListener('click', async () => {
+  const channel = updateChannel.value
+  updateStatus.textContent = 'checking...'
+  try {
+    const r = await fetch(`/dev/check-updates?channel=${encodeURIComponent(channel)}`)
+    const j = await r.json()
+    if (!j.ok) { updateStatus.textContent = 'check failed'; return }
+    updateStatus.textContent = `latest: ${j.latestVersion || 'n/a'} ${j.name ? '- ' + j.name : ''}`
+    currentVersionLabel.textContent = `${channel}:${j.latestVersion || 'n/a'}`
+    if (j.tarballUrl) {
+      downloadUpdateBtn.disabled = false
+      downloadUpdateBtn.dataset.url = j.tarballUrl
+    } else {
+      downloadUpdateBtn.disabled = true
+      downloadUpdateBtn.dataset.url = ''
+    }
+  } catch (e) { updateStatus.textContent = 'check error' }
+})
+
+downloadUpdateBtn.addEventListener('click', async () => {
+  const url = downloadUpdateBtn.dataset.url
+  if (!url) return
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) { updateStatus.textContent = 'download failed' ; return }
+    const blob = await resp.blob()
+    const a = document.createElement('a')
+    const u = URL.createObjectURL(blob)
+    a.href = u
+    a.download = 'update.tar.gz'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(u), 60000)
+    updateStatus.textContent = 'downloaded tarball (client)'
+  } catch (e) { updateStatus.textContent = 'download error' }
+})
+
+applyUpdateBtn.addEventListener('click', async () => {
+  const channel = updateChannel.value
+  updateStatus.textContent = 'applying...'
+  try {
+    const r = await fetch('/dev/apply-update', { method: 'POST', body: new URLSearchParams({ channel }) })
+    const j = await r.json()
+    if (j && j.ok) {
+      updateStatus.textContent = 'applied. restart server to load new code.'
+      setTimeout(() => location.reload(), 1200)
+    } else updateStatus.textContent = 'apply failed: ' + (j && j.message ? j.message : 'unknown')
+  } catch (e) { updateStatus.textContent = 'apply error' }
+})
+
+updateInfoBtn.addEventListener('mouseenter', (e) => {
+  updateTooltip.style.display = 'block'
+  const r = updateInfoBtn.getBoundingClientRect()
+  updateTooltip.style.left = (r.left - 300) + 'px'
+  updateTooltip.style.top = (r.bottom + 8) + 'px'
+})
+updateInfoBtn.addEventListener('mouseleave', () => { updateTooltip.style.display = 'none' })
+
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (devOverlay.style.display === 'flex') closeDevMenu() } })
+document.addEventListener('click', async function resumeAudio(e) {
+  try {
+    if (window.__audioCtx && window.__audioCtx.state === 'suspended') await window.__audioCtx.resume()
+  } catch (e) {}
+  document.removeEventListener('click', resumeAudio)
+})
 </script>
 </body>
 </html>

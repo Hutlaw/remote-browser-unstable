@@ -1,9 +1,12 @@
 {
-  "channel": "unstable",
-  "currentVersion": "v2.2.4",
-  "repo": "Hutlaw/remote-browser-unstable",
-  "lastChecked": null,
-  "lastApplied": null,
-  "tarballUrl": null,
-  "autoApply": false
+  "channel": "stable",
+  "version": "2.2.5",
+  "repo": "https://github.com/Hutlaw/remote-browser-stable",
+  "branch": "main",
+  "files": [
+    "server.js",
+    "public/index.html",
+    "package.json",
+    "install-deps.sh"
+  ]
 }

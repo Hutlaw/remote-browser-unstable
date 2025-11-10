@@ -184,11 +184,16 @@ async function downloadUpdate(channel, tmpDir) {
   for (const f of files) {
     const url = rawBase + '/' + f.replace(/^\/+/,'')
     const txt = await fetchTextRaw(url)
-    const outPath = path.join(tmpDir, path.basename(f))
+    const outPath = path.join(tmpDir, f.replace(/^\/+/,''))
+    const outDir = path.dirname(outPath)
+    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true })
     fs.writeFileSync(outPath, txt, 'utf8')
     downloaded.push({ file: f, path: outPath })
   }
-  return { ok: true, cfg, downloaded }
+  const meta = { downloadedAt: Date.now(), channel: targetChannel, cfg: cfg, downloaded }
+  const markerPath = path.join(tmpDir, '.downloaded.json')
+  fs.writeFileSync(markerPath, JSON.stringify(meta, null, 2), 'utf8')
+  return { ok: true, cfg, downloaded, meta, tmpDir }
 }
 function backupAndReplaceFiles(downloaded, backupDir) {
   try {
@@ -207,12 +212,42 @@ function backupAndReplaceFiles(downloaded, backupDir) {
       const destDir = path.dirname(target)
       if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
       const content = fs.readFileSync(d.path, 'utf8')
-      fs.writeFileSync(target, content, 'utf8')
+      const tmpWrite = target + '.tmp.' + makeId()
+      fs.writeFileSync(tmpWrite, content, 'utf8')
+      fs.renameSync(tmpWrite, target)
     }
     return { ok: true }
   } catch (e) {
     return { ok: false, message: String(e) }
   }
+}
+function findLatestDownloadedTmpDir() {
+  try {
+    const tdir = os.tmpdir()
+    const entries = fs.readdirSync(tdir).filter(n => n.startsWith('update_'))
+    let best = null
+    for (const e of entries) {
+      const full = path.join(tdir, e)
+      try {
+        const marker = path.join(full, '.downloaded.json')
+        if (fs.existsSync(marker)) {
+          const st = fs.statSync(marker)
+          if (!best || st.mtimeMs > best.stat) best = { dir: full, stat: st.mtimeMs, marker }
+        }
+      } catch (err) {}
+    }
+    return best ? best.dir : null
+  } catch (e) { return null }
+}
+function writeUpdateLog(name, data) {
+  try {
+    const logDir = path.join(__dirname, 'update_logs')
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true })
+    const fname = path.join(logDir, `${Date.now()}-${name.replace(/[^a-z0-9._-]/ig,'_')}.log`)
+    fs.writeFileSync(fname, typeof data === 'string' ? data : JSON.stringify(data, null, 2), 'utf8')
+    try { fs.writeFileSync(path.join(logDir, 'last.log'), typeof data === 'string' ? data : JSON.stringify(data, null, 2), 'utf8') } catch (e) {}
+    return fname
+  } catch (e) { return null }
 }
 async function start() {
   if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true })
@@ -280,6 +315,14 @@ async function start() {
       res.json({ ok: true, stats })
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
+  app.get('/dev/last-update-log', (req, res) => {
+    try {
+      const logDir = path.join(__dirname, 'update_logs')
+      const lf = path.join(logDir, 'last.log')
+      if (fs.existsSync(lf)) res.type('text/plain').send(fs.readFileSync(lf, 'utf8'))
+      else res.status(404).send('no log')
+    } catch (e) { res.status(500).send(String(e)) }
+  })
   app.post('/dev/set-quality', express.json(), (req, res) => {
     try {
       const q = Number(req.body.quality)
@@ -310,42 +353,46 @@ async function start() {
       fs.mkdirSync(tmpDir, { recursive: true })
       const dl = await downloadUpdate(ch, tmpDir)
       if (!dl.ok) return res.status(500).json({ ok: false, message: 'download failed' })
-      const marker = path.join(tmpDir, '.downloaded')
-      fs.writeFileSync(marker, JSON.stringify({ downloadedAt: Date.now(), channel: ch }), 'utf8')
+      const marker = path.join(tmpDir, '.downloaded.json')
+      if (!fs.existsSync(marker)) return res.status(500).json({ ok: false, message: 'download marker missing after download' })
       res.json({ ok: true, message: 'downloaded', tmpDir })
-    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
+    } catch (e) { const log = writeUpdateLog('download-error', { err: String(e) }); res.status(500).json({ ok: false, message: String(e), log }) }
   })
   app.post('/dev/apply-update', uploadMw.none(), async (req, res) => {
     try {
       const ch = String(req.query.channel || '').trim() || loadLocalUpdateConfig().channel || 'stable'
       const restart = String(req.query.restart || '0') === '1'
-      const tmpDirGlob = fs.readdirSync(os.tmpdir()).find(d => d.startsWith('update_'))
-      if (!tmpDirGlob) return res.status(400).json({ ok: false, message: 'no downloaded update found in tmp' })
-      const tmpDir = path.join(os.tmpdir(), tmpDirGlob)
-      const marker = path.join(tmpDir, '.downloaded')
+      const tmpDir = findLatestDownloadedTmpDir()
+      if (!tmpDir) return res.status(400).json({ ok: false, message: 'no downloaded update found in tmp' })
+      const marker = path.join(tmpDir, '.downloaded.json')
       if (!fs.existsSync(marker)) return res.status(400).json({ ok: false, message: 'download marker missing' })
-      const files = fs.readdirSync(tmpDir).filter(x => x !== '.downloaded')
-      if (!files.length) return res.status(400).json({ ok: false, message: 'no files to apply' })
-      const downloaded = files.map(fn => ({ file: fn, path: path.join(tmpDir, fn) }))
+      const meta = JSON.parse(fs.readFileSync(marker, 'utf8'))
+      const downloaded = meta.downloaded || []
+      if (!downloaded.length) return res.status(400).json({ ok: false, message: 'no files found in downloaded metadata' })
       const backupDir = path.join(__dirname, 'update_backups', String(Date.now()))
       const replaced = backupAndReplaceFiles(downloaded, backupDir)
-      if (!replaced.ok) return res.status(500).json({ ok: false, message: replaced.message })
-      const newVer = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8')).version || loadLocalUpdateConfig().version
+      if (!replaced.ok) {
+        const logPath = writeUpdateLog('apply-failed', { replaced, downloaded })
+        return res.status(500).json({ ok: false, message: replaced.message, log: logPath })
+      }
+      const remoteCfg = meta.cfg || {}
+      const newVer = remoteCfg.version || loadLocalUpdateConfig().version || '0.0.0'
       const localCfg = loadLocalUpdateConfig()
       localCfg.channel = ch
       localCfg.version = newVer
       saveLocalUpdateConfig(localCfg)
       rimrafSync(tmpDir)
       const msg = 'update applied to files; backup stored at ' + backupDir
+      const logPath = writeUpdateLog('apply-success', { message: msg, backupDir, channel: ch, version: newVer, replaced })
       if (restart) {
-        res.json({ ok: true, message: msg + ' — restarting' })
+        res.json({ ok: true, message: msg + ' — restarting', log: logPath })
         process.exit(0)
         return
       } else {
-        res.json({ ok: true, message: msg })
+        res.json({ ok: true, message: msg, log: logPath })
         return
       }
-    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
+    } catch (e) { const log = writeUpdateLog('apply-exception', { err: String(e) }); res.status(500).json({ ok: false, message: String(e), log }) }
   })
   app.get('/dev/export', (req, res) => {
     try {

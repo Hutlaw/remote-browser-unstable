@@ -42,6 +42,12 @@ function ensureModule(name, version) {
     } catch (e2) { return null }
   }
 }
+let fetchFunc = null
+if (typeof globalThis.fetch === 'function') fetchFunc = globalThis.fetch.bind(globalThis)
+else {
+  const nf = ensureModule('node-fetch', '2.6.7')
+  if (nf) fetchFunc = nf
+}
 const Archiver = ensureModule('archiver', '5.3.1')
 const Tar = ensureModule('tar', '6.1.11')
 const Unzipper = ensureModule('unzipper', '0.10.11')
@@ -57,7 +63,7 @@ try {
 }
 const SESSION_FILE = path.join(__dirname, 'session_state.json')
 const userDataDir = process.env.USER_DATA_DIR || path.join(__dirname, 'chrome-profile')
-const LOCAL_UPDATE_FILE = path.join(__dirname, 'update_local.json')
+const LOCAL_UPDATE_CONFIG = path.join(__dirname, 'update_config.local.json')
 function loadSessionState() {
   try { if (fs.existsSync(SESSION_FILE)) return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8') || '{}') } catch (e) {}
   return {}
@@ -65,12 +71,12 @@ function loadSessionState() {
 function saveSessionState(state) {
   try { fs.writeFileSync(SESSION_FILE, JSON.stringify(state || {}, null, 2), 'utf8') } catch (e) {}
 }
-function loadLocalUpdate() {
-  try { if (fs.existsSync(LOCAL_UPDATE_FILE)) return JSON.parse(fs.readFileSync(LOCAL_UPDATE_FILE, 'utf8') || '{}') } catch (e) {}
-  return { version: 'v2.2.4', channel: 'stable' }
+function loadLocalUpdateConfig() {
+  try { if (fs.existsSync(LOCAL_UPDATE_CONFIG)) return JSON.parse(fs.readFileSync(LOCAL_UPDATE_CONFIG, 'utf8')) } catch (e) {}
+  return { channel: 'stable', version: '0.0.0' }
 }
-function saveLocalUpdate(obj) {
-  try { fs.writeFileSync(LOCAL_UPDATE_FILE, JSON.stringify(obj || {}, null, 2), 'utf8') } catch (e) {}
+function saveLocalUpdateConfig(cfg) {
+  try { fs.writeFileSync(LOCAL_UPDATE_CONFIG, JSON.stringify(cfg, null, 2), 'utf8') } catch (e) {}
 }
 let browser = null
 let launchOptions = null
@@ -127,80 +133,83 @@ function stopAudioCapture(wsaudio, sendBroadcast) {
   sendBroadcast({ type: 'audio-available', available: false })
   try { wsaudio.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ type: 'audio-available', available: false })) }) } catch (e) {}
 }
-const UPDATE_CHANNELS = {
-  stable: {
-    repoUrl: 'https://github.com/Hutlaw/remote-browser-stable',
-    rawBase: 'https://raw.githubusercontent.com/Hutlaw/remote-browser-stable/main'
-  },
-  unstable: {
-    repoUrl: 'https://github.com/Hutlaw/remote-browser-unstable',
-    rawBase: 'https://raw.githubusercontent.com/Hutlaw/remote-browser-unstable/main'
+async function fetchJsonRaw(url) {
+  if (!fetchFunc) throw new Error('fetch not available')
+  const r = await fetchFunc(url)
+  if (!r.ok) throw new Error('fetch failed ' + r.status)
+  return r.json()
+}
+async function fetchTextRaw(url) {
+  if (!fetchFunc) throw new Error('fetch not available')
+  const r = await fetchFunc(url)
+  if (!r.ok) throw new Error('fetch failed ' + r.status)
+  return r.text()
+}
+async function checkForUpdate(channel) {
+  const local = loadLocalUpdateConfig()
+  const targetChannel = channel || local.channel || 'stable'
+  const repoUrl = targetChannel === 'unstable' ? 'https://raw.githubusercontent.com/Hutlaw/remote-browser-unstable/main/update_config.json' : 'https://raw.githubusercontent.com/Hutlaw/remote-browser-stable/main/update_config.json'
+  try {
+    const remote = await fetchJsonRaw(repoUrl)
+    const localVersion = local.version || '0.0.0'
+    const remoteVersion = remote.version || '0.0.0'
+    const avail = compareVersions(remoteVersion, localVersion) > 0
+    return { ok: true, updateAvailable: avail, local: local, remote: remote }
+  } catch (e) {
+    return { ok: false, message: String(e) }
   }
 }
-async function fetchJson(url) {
-  try {
-    if (typeof fetch !== 'function') {
-      const nf = require('node-fetch')
-      return nf(url).then(r => r.json())
-    } else {
-      const r = await fetch(url)
-      return await r.json()
-    }
-  } catch (e) { throw e }
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map(x => parseInt(x||'0',10))
+  const pb = String(b).split('.').map(x => parseInt(x||'0',10))
+  for (let i=0;i<Math.max(pa.length,pb.length);i++) {
+    const na = pa[i]||0
+    const nb = pb[i]||0
+    if (na>nb) return 1
+    if (na<nb) return -1
+  }
+  return 0
 }
-async function fetchText(url) {
-  try {
-    if (typeof fetch !== 'function') {
-      const nf = require('node-fetch')
-      return nf(url).then(r => r.text())
-    } else {
-      const r = await fetch(url)
-      return await r.text()
-    }
-  } catch (e) { throw e }
+async function downloadUpdate(channel, tmpDir) {
+  const targetChannel = channel || (loadLocalUpdateConfig().channel || 'stable')
+  const updateConfigUrl = targetChannel === 'unstable' ? 'https://raw.githubusercontent.com/Hutlaw/remote-browser-unstable/main/update_config.json' : 'https://raw.githubusercontent.com/Hutlaw/remote-browser-stable/main/update_config.json'
+  const cfg = await fetchJsonRaw(updateConfigUrl)
+  const branch = cfg.branch || 'main'
+  const repo = cfg.repo
+  const files = cfg.files || []
+  const user = repo.replace(/https:\/\/github.com\//,'').split('/')[0]
+  const repoName = repo.replace(/https:\/\/github.com\//,'').split('/')[1]
+  const rawBase = `https://raw.githubusercontent.com/${user}/${repoName}/${branch}`
+  const downloaded = []
+  for (const f of files) {
+    const url = rawBase + '/' + f.replace(/^\/+/,'')
+    const txt = await fetchTextRaw(url)
+    const outPath = path.join(tmpDir, path.basename(f))
+    fs.writeFileSync(outPath, txt, 'utf8')
+    downloaded.push({ file: f, path: outPath })
+  }
+  return { ok: true, cfg, downloaded }
 }
-async function downloadFileToPath(rawUrl, destPath) {
+function backupAndReplaceFiles(downloaded, backupDir) {
   try {
-    const txt = await fetchText(rawUrl)
-    fs.mkdirSync(path.dirname(destPath), { recursive: true })
-    fs.writeFileSync(destPath, txt, 'utf8')
-    return true
-  } catch (e) { return false }
-}
-async function performUpdate(channel, wss) {
-  try {
-    const info = UPDATE_CHANNELS[channel]
-    if (!info) throw new Error('unknown channel')
-    const rcfgUrl = `${info.rawBase}/update_config.json`
-    const remoteCfg = await fetchJson(rcfgUrl)
-    const files = Array.isArray(remoteCfg.files) ? remoteCfg.files : ['server.js','public/index.html','package.json','install-deps.sh']
-    const version = remoteCfg.version || 'unknown'
-    const tmpDir = path.join(os.tmpdir(), `update_${Date.now()}`)
-    fs.mkdirSync(tmpDir, { recursive: true })
-    const fetched = []
-    for (const f of files) {
-      const raw = `${info.rawBase}/${f}`
-      const out = path.join(tmpDir, f)
-      const ok = await downloadFileToPath(raw, out)
-      if (ok) fetched.push({ f, out }) else throw new Error('failed to download ' + f)
-    }
-    const backupDir = path.join(__dirname, 'backups', `${Date.now()}`)
     fs.mkdirSync(backupDir, { recursive: true })
-    for (const item of fetched) {
-      const rel = item.f
-      const target = path.join(__dirname, rel)
+    for (const d of downloaded) {
+      const target = path.join(__dirname, d.file)
       if (fs.existsSync(target)) {
-        const destBk = path.join(backupDir, rel)
-        fs.mkdirSync(path.dirname(destBk), { recursive: true })
-        fs.renameSync(target, destBk)
+        const destBackup = path.join(backupDir, d.file + '.bak')
+        const destDir = path.dirname(destBackup)
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+        fs.copyFileSync(target, destBackup)
       }
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.renameSync(item.out, target)
     }
-    saveLocalUpdate({ version, channel })
-    broadcastAll(wss, { type: 'update-applied', version, channel })
-    setTimeout(() => { process.exit(0) }, 1200)
-    return { ok: true, version }
+    for (const d of downloaded) {
+      const target = path.join(__dirname, d.file)
+      const destDir = path.dirname(target)
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+      const content = fs.readFileSync(d.path, 'utf8')
+      fs.writeFileSync(target, content, 'utf8')
+    }
+    return { ok: true }
   } catch (e) {
     return { ok: false, message: String(e) }
   }
@@ -266,8 +275,8 @@ async function start() {
   app.get('/dev/state', (req, res) => {
     try {
       const st = loadSessionState()
-      const localUpd = loadLocalUpdate()
-      const stats = { pid: process.pid, userDataDir, appPort: APP_PORT, platform: os.platform(), arch: os.arch(), uptime: process.uptime(), memory: process.memoryUsage(), audioAvailable, sessionState: st, jpegQuality, localUpdate: localUpd }
+      const localUpdate = loadLocalUpdateConfig()
+      const stats = { pid: process.pid, userDataDir, appPort: APP_PORT, platform: os.platform(), arch: os.arch(), uptime: process.uptime(), memory: process.memoryUsage(), audioAvailable, sessionState: st, jpegQuality, localUpdate }
       res.json({ ok: true, stats })
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
@@ -289,26 +298,53 @@ async function start() {
   })
   app.get('/dev/check-updates', async (req, res) => {
     try {
-      const channel = String(req.query.channel || 'stable')
-      const info = UPDATE_CHANNELS[channel]
-      if (!info) return res.status(400).json({ ok: false, message: 'unknown channel' })
-      const rcfgUrl = `${info.rawBase}/update_config.json`
-      let remoteCfg = null
-      try { remoteCfg = await fetchJson(rcfgUrl) } catch (e) { return res.status(500).json({ ok: false, message: 'failed to fetch remote config: ' + String(e) }) }
-      const remoteVersion = remoteCfg.version || 'unknown'
-      const local = loadLocalUpdate()
-      const hasUpdate = remoteVersion !== (local.version || '')
-      return res.json({ ok: true, channel, remoteVersion, localVersion: local.version || '', hasUpdate, files: remoteCfg.files || [] })
+      const ch = String(req.query.channel || '').trim() || loadLocalUpdateConfig().channel || 'stable'
+      const result = await checkForUpdate(ch)
+      res.json(result)
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
-  app.post('/dev/download-update', express.json(), async (req, res) => {
+  app.get('/dev/download-update', async (req, res) => {
     try {
-      const channel = String(req.body.channel || 'stable')
-      const info = UPDATE_CHANNELS[channel]
-      if (!info) return res.status(400).json({ ok: false, message: 'unknown channel' })
-      const result = await performUpdate(channel, wss)
-      if (result.ok) return res.json({ ok: true, version: result.version })
-      else return res.status(500).json({ ok: false, message: result.message })
+      const ch = String(req.query.channel || '').trim() || loadLocalUpdateConfig().channel || 'stable'
+      const tmpDir = path.join(os.tmpdir(), `update_${Date.now()}`)
+      fs.mkdirSync(tmpDir, { recursive: true })
+      const dl = await downloadUpdate(ch, tmpDir)
+      if (!dl.ok) return res.status(500).json({ ok: false, message: 'download failed' })
+      const marker = path.join(tmpDir, '.downloaded')
+      fs.writeFileSync(marker, JSON.stringify({ downloadedAt: Date.now(), channel: ch }), 'utf8')
+      res.json({ ok: true, message: 'downloaded', tmpDir })
+    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
+  })
+  app.post('/dev/apply-update', uploadMw.none(), async (req, res) => {
+    try {
+      const ch = String(req.query.channel || '').trim() || loadLocalUpdateConfig().channel || 'stable'
+      const restart = String(req.query.restart || '0') === '1'
+      const tmpDirGlob = fs.readdirSync(os.tmpdir()).find(d => d.startsWith('update_'))
+      if (!tmpDirGlob) return res.status(400).json({ ok: false, message: 'no downloaded update found in tmp' })
+      const tmpDir = path.join(os.tmpdir(), tmpDirGlob)
+      const marker = path.join(tmpDir, '.downloaded')
+      if (!fs.existsSync(marker)) return res.status(400).json({ ok: false, message: 'download marker missing' })
+      const files = fs.readdirSync(tmpDir).filter(x => x !== '.downloaded')
+      if (!files.length) return res.status(400).json({ ok: false, message: 'no files to apply' })
+      const downloaded = files.map(fn => ({ file: fn, path: path.join(tmpDir, fn) }))
+      const backupDir = path.join(__dirname, 'update_backups', String(Date.now()))
+      const replaced = backupAndReplaceFiles(downloaded, backupDir)
+      if (!replaced.ok) return res.status(500).json({ ok: false, message: replaced.message })
+      const newVer = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8')).version || loadLocalUpdateConfig().version
+      const localCfg = loadLocalUpdateConfig()
+      localCfg.channel = ch
+      localCfg.version = newVer
+      saveLocalUpdateConfig(localCfg)
+      rimrafSync(tmpDir)
+      const msg = 'update applied to files; backup stored at ' + backupDir
+      if (restart) {
+        res.json({ ok: true, message: msg + ' — restarting' })
+        process.exit(0)
+        return
+      } else {
+        res.json({ ok: true, message: msg })
+        return
+      }
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
   app.get('/dev/export', (req, res) => {

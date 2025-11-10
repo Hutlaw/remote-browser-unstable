@@ -6,11 +6,22 @@ const fs = require('fs')
 const os = require('os')
 const { spawn, spawnSync } = require('child_process')
 const multer = require('multer')
+const Tar = (() => { try { return require('tar') } catch(e){ return null } })()
 const APP_PORT = parseInt(process.env.PORT || '3000', 10)
 const VIEWPORT = { width: 1280, height: 800 }
 const MAX_FPS = Math.max(5, Math.min(60, parseInt(process.env.MAX_FPS || '15', 10)))
 const FRAME_INTERVAL_MS = Math.round(1000 / MAX_FPS)
 let jpegQuality = Math.max(10, Math.min(95, parseInt(process.env.JPEG_QUALITY || '60', 10)))
+let fetchFunc = null
+if (typeof globalThis.fetch === 'function') fetchFunc = globalThis.fetch.bind(globalThis)
+else {
+  try {
+    const nf = require('node-fetch')
+    fetchFunc = (nf && nf.default) ? nf.default : nf
+  } catch (e) {
+    fetchFunc = null
+  }
+}
 function execOk(cmd) {
   try {
     const r = spawnSync(cmd, ['-version'], { timeout: 2000 })
@@ -33,19 +44,15 @@ function rimrafSync(p) {
     } else fs.unlinkSync(p)
   } catch (e) {}
 }
-function ensureModule(name, version) {
-  try { return require(name) } catch (e) {
-    try {
-      const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      spawnSync(npm, ['install', `${name}@${version}`, '--no-audit', '--no-fund'], { stdio: 'inherit', timeout: 120000 })
-      return require(name)
-    } catch (e2) { return null }
-  }
+const SESSION_FILE = path.join(__dirname, 'session_state.json')
+const userDataDir = process.env.USER_DATA_DIR || path.join(__dirname, 'chrome-profile')
+function loadSessionState() {
+  try { if (fs.existsSync(SESSION_FILE)) return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8') || '{}') } catch (e) {}
+  return {}
 }
-const Archiver = ensureModule('archiver', '5.3.1')
-const Tar = ensureModule('tar', '6.1.11')
-const Unzipper = ensureModule('unzipper', '0.10.11')
-const AdmZip = ensureModule('adm-zip', '0.5.9')
+function saveSessionState(state) {
+  try { fs.writeFileSync(SESSION_FILE, JSON.stringify(state || {}, null, 2), 'utf8') } catch (e) {}
+}
 let puppeteer
 try {
   const puppeteerExtra = require('puppeteer-extra')
@@ -55,45 +62,120 @@ try {
 } catch (e) {
   try { puppeteer = require('puppeteer') } catch (err) { console.error('Install dependencies: npm install'); process.exit(1) }
 }
-const SESSION_FILE = path.join(__dirname, 'session_state.json')
-const userDataDir = process.env.USER_DATA_DIR || path.join(__dirname, 'chrome-profile')
-const UPDATE_CONFIG_FILE = path.join(__dirname, 'update_config.json')
-const UPDATE_CHANNELS = {
-  stable: { owner: 'Hutlaw', repo: 'remote-browser-stable' },
-  unstable: { owner: 'Hutlaw', repo: 'remote-browser-unstable' }
-}
-function loadSessionState() {
-  try { if (fs.existsSync(SESSION_FILE)) return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8') || '{}') } catch (e) {}
-  return {}
-}
-function saveSessionState(state) {
-  try { fs.writeFileSync(SESSION_FILE, JSON.stringify(state || {}, null, 2), 'utf8') } catch (e) {}
-}
-function loadUpdateConfig() {
-  try { if (fs.existsSync(UPDATE_CONFIG_FILE)) return JSON.parse(fs.readFileSync(UPDATE_CONFIG_FILE, 'utf8') || '{}') } catch (e) {}
-  return { channel: 'stable', currentVersion: null }
-}
-function saveUpdateConfig(cfg) {
-  try { fs.writeFileSync(UPDATE_CONFIG_FILE, JSON.stringify(cfg || {}, null, 2), 'utf8') } catch (e) {}
-}
 let browser = null
 let launchOptions = null
 let ffmpegProcess = null
 let silentAudioInterval = null
 let audioAvailable = false
-async function restartBrowser() {
+
+function getUpdateConfigPath(channel) {
+  const candidate = path.join(__dirname, channel, 'update_config.json')
+  if (fs.existsSync(candidate)) return candidate
+  const fallback = path.join(__dirname, 'update_config.json')
+  return fallback
+}
+
+async function getLatestInfoForChannel(channel) {
   try {
-    if (browser) { try { await browser.close() } catch (e) {} browser = null }
-    browser = await puppeteer.launch(launchOptions)
-    return browser
+    const cfgPath = getUpdateConfigPath(channel)
+    let cfg = { repo: null, currentVersion: null }
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) } catch (e) {}
+    const repo = cfg.repo || (channel === 'stable' ? 'Hutlaw/remote-browser-stable' : 'Hutlaw/remote-browser-unstable')
+    const apiBase = 'https://api.github.com/repos/' + repo
+    const headers = { 'User-Agent': 'remote-browser-updater/1' }
+    if (!fetchFunc) return { ok: false, message: 'fetch not available' }
+    if (channel === 'stable') {
+      const resp = await fetchFunc(apiBase + '/releases/latest', { headers })
+      if (!resp.ok) return { ok: false, message: 'release fetch failed', status: resp.status }
+      const j = await resp.json()
+      const latestVersion = j.tag_name || j.name || j.id || null
+      const tarballUrl = j.tarball_url || j.tarball_url || null
+      return { ok: true, latestVersion, tarballUrl, name: j.name || null }
+    } else {
+      const resp = await fetchFunc(apiBase + '/commits?per_page=1', { headers })
+      if (!resp.ok) return { ok: false, message: 'commits fetch failed', status: resp.status }
+      const arr = await resp.json()
+      if (!arr || !arr.length) return { ok: false, message: 'no commits' }
+      const sha = arr[0].sha
+      const latestVersion = sha
+      const tarballUrl = apiBase + '/tarball/' + sha
+      return { ok: true, latestVersion, tarballUrl, name: arr[0].commit && arr[0].commit.message ? arr[0].commit.message.split('\n')[0] : null }
+    }
   } catch (e) {
-    throw e
+    return { ok: false, message: String(e) }
   }
 }
+
+async function downloadToFile(url, destPath) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      if (!fetchFunc) return reject(new Error('fetch not available'))
+      const resp = await fetchFunc(url, { headers: { 'User-Agent': 'remote-browser-updater/1', 'Accept': 'application/octet-stream' } })
+      if (!resp.ok) return reject(new Error('download failed status ' + resp.status))
+      const fileStream = fs.createWriteStream(destPath)
+      resp.body.pipe(fileStream)
+      resp.body.on('error', (err) => { try { fileStream.close() } catch (e) {} reject(err) })
+      fileStream.on('finish', () => fileStream.close(() => resolve()))
+      fileStream.on('error', (err) => { try { fileStream.close() } catch (e) {} reject(err) })
+    } catch (e) { reject(e) }
+  })
+}
+
+async function applyUpdateFromTarball(tarballPath, tmpDir) {
+  try {
+    if (Tar) {
+      await Tar.x({ file: tarballPath, cwd: tmpDir, gzip: true })
+      return true
+    } else {
+      const sp = spawnSync('tar', ['-xzf', tarballPath, '-C', tmpDir], { timeout: 0 })
+      return sp.status === 0
+    }
+  } catch (e) {
+    return false
+  }
+}
+
+function findFileInExtracted(root, filename) {
+  try {
+    const stack = [root]
+    while (stack.length) {
+      const cur = stack.pop()
+      const entries = fs.readdirSync(cur)
+      for (const e of entries) {
+        const full = path.join(cur, e)
+        const st = fs.statSync(full)
+        if (st.isDirectory()) {
+          stack.push(full)
+        } else {
+          if (e === filename) return full
+        }
+      }
+    }
+  } catch (e) {}
+  return null
+}
+
+function backupAndReplace(src, dest) {
+  try {
+    if (fs.existsSync(dest)) {
+      const bak = dest + '.bak.' + Date.now()
+      try { fs.copyFileSync(dest, bak) } catch (e) {}
+    }
+    const destDir = path.dirname(dest)
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+    fs.copyFileSync(src, dest)
+    try { fs.chmodSync(dest, 0o644) } catch (e) {}
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 function broadcastAll(wsServer, obj) {
   const s = JSON.stringify(obj)
   wsServer.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(s) })
 }
+
 function startAudioCapture(wsaudio, sendBroadcast) {
   if (ffmpegProcess || silentAudioInterval) return
   if (execOk('ffmpeg')) {
@@ -122,6 +204,7 @@ function startAudioCapture(wsaudio, sendBroadcast) {
     try { wsaudio.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(buf) }) } catch (e) {}
   }, chunkDurationMs)
 }
+
 function stopAudioCapture(wsaudio, sendBroadcast) {
   try {
     if (ffmpegProcess) { ffmpegProcess.kill('SIGTERM'); ffmpegProcess = null }
@@ -131,98 +214,21 @@ function stopAudioCapture(wsaudio, sendBroadcast) {
   sendBroadcast({ type: 'audio-available', available: false })
   try { wsaudio.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ type: 'audio-available', available: false })) }) } catch (e) {}
 }
-async function fetchJson(url, opts) {
+
+async function restartBrowser() {
   try {
-    const r = await fetch(url, opts || {})
-    if (!r.ok) return null
-    return await r.json()
-  } catch (e) { return null }
+    if (browser) { try { await browser.close() } catch (e) {} browser = null }
+    browser = await puppeteer.launch(launchOptions)
+    return browser
+  } catch (e) { throw e }
 }
-async function fetchBuffer(url, opts, outPath) {
-  const r = await fetch(url, opts || {})
-  if (!r.ok) throw new Error('fetch failed: ' + r.status)
-  const dest = fs.createWriteStream(outPath)
-  await new Promise((resolve, reject) => {
-    const reader = r.body
-    reader.pipe(dest)
-    reader.on('error', reject)
-    dest.on('finish', resolve)
-  })
-}
-async function getLatestInfoForChannel(channel) {
-  const cfg = UPDATE_CHANNELS[channel]
-  if (!cfg) return null
-  const owner = cfg.owner
-  const repo = cfg.repo
-  const releaseUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`
-  const release = await fetchJson(releaseUrl, { headers: { 'User-Agent': 'remote-browser-updater' } })
-  if (release && release.tag_name) {
-    return { latestVersion: release.tag_name, latestMessage: release.name || release.body || '', tarballUrl: release.tarball_url || `https://api.github.com/repos/${owner}/${repo}/tarball/${release.tag_name}` }
-  }
-  const commitsUrl = `https://api.github.com/repos/${owner}/${repo}/commits`
-  const commits = await fetchJson(commitsUrl, { headers: { 'User-Agent': 'remote-browser-updater' } })
-  if (commits && commits.length) {
-    const sha = commits[0].sha
-    return { latestVersion: sha, latestMessage: commits[0].commit && commits[0].commit.message ? commits[0].commit.message.split('\n')[0] : '', tarballUrl: `https://api.github.com/repos/${owner}/${repo}/tarball/${sha}` }
-  }
-  return null
-}
-async function applyUpdateFromChannel(channel) {
-  const info = await getLatestInfoForChannel(channel)
-  if (!info) throw new Error('no update info')
-  const tmpDir = path.join(os.tmpdir(), `rb_update_${Date.now()}`)
-  fs.mkdirSync(tmpDir, { recursive: true })
-  const tarPath = path.join(tmpDir, 'update.tar.gz')
-  await fetchBuffer(info.tarballUrl, { headers: { 'User-Agent': 'remote-browser-updater', Accept: 'application/vnd.github+json' } }, tarPath)
-  await Tar.x({ file: tarPath, cwd: tmpDir, gzip: true })
-  const entries = fs.readdirSync(tmpDir)
-  let rootDir = tmpDir
-  for (const e of entries) {
-    const full = path.join(tmpDir, e)
-    try {
-      if (fs.statSync(full).isDirectory()) { rootDir = full; break }
-    } catch (e) {}
-  }
-  const wantFiles = ['server.js', path.join('public','index.html'), 'package.json', 'install-deps.sh']
-  const found = []
-  for (const wf of wantFiles) {
-    const candidate = path.join(rootDir, wf)
-    if (fs.existsSync(candidate)) found.push({ src: candidate, dest: path.join(__dirname, path.basename(wf)) })
-    else {
-      const alt = path.join(rootDir, path.basename(wf))
-      if (fs.existsSync(alt)) found.push({ src: alt, dest: path.join(__dirname, path.basename(wf)) })
-    }
-  }
-  const backups = []
-  for (const f of found) {
-    const destExists = fs.existsSync(f.dest)
-    if (destExists) {
-      const bak = f.dest + '.bak.' + Date.now()
-      fs.copyFileSync(f.dest, bak)
-      backups.push(bak)
-    }
-    const dir = path.dirname(f.dest)
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.copyFileSync(f.src, f.dest)
-  }
-  rimrafSync(tmpDir)
-  const cfg = loadUpdateConfig()
-  cfg.channel = channel
-  cfg.currentVersion = info.latestVersion
-  saveUpdateConfig(cfg)
-  return { applied: found.map(f=>path.basename(f.dest)), version: info.latestVersion, message: info.latestMessage || '' }
-}
+
 async function start() {
   if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true })
   try { fs.chmodSync(userDataDir, 0o700) } catch (e) {}
-  const uploadsDir = path.join(userDataDir, 'uploads')
-  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
-  const downloadsDir = path.join(userDataDir, 'downloads')
-  if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true })
-  const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadsDir),
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2,8)}-${file.originalname}`)
-  })
+  const uploadsDir = path.join(userDataDir, 'uploads'); if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
+  const downloadsDir = path.join(userDataDir, 'downloads'); if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true })
+  const storage = multer.diskStorage({ destination: (req, file, cb) => cb(null, uploadsDir), filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2,8)}-${file.originalname}`) })
   const uploadMw = multer({ storage })
   launchOptions = { args: ['--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--disable-gpu', '--disable-blink-features=AutomationControlled', '--disable-infobars', '--no-default-browser-check', '--disable-extensions', '--start-maximized'], headless: true }
   if (process.env.HEADFUL === '1') launchOptions.headless = false
@@ -233,12 +239,7 @@ async function start() {
   const app = express()
   app.use(express.static(path.join(__dirname, 'public')))
   app.get('/__health', (req, res) => res.json({ ok: true, pid: process.pid, userDataDir }))
-  const storage2 = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadsDir),
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2,8)}-${file.originalname}`)
-  })
-  const uploadMw2 = multer({ storage: storage2 })
-  app.post('/upload', uploadMw2.single('file'), async (req, res) => {
+  app.post('/upload', uploadMw.single('file'), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ ok: false, message: 'no file' })
       const session = Object.values(sessions)[0]
@@ -278,11 +279,11 @@ async function start() {
   app.get('/dev/state', (req, res) => {
     try {
       const st = loadSessionState()
-      const uc = loadUpdateConfig()
-      const stats = { pid: process.pid, userDataDir, appPort: APP_PORT, platform: os.platform(), arch: os.arch(), uptime: process.uptime(), memory: process.memoryUsage(), audioAvailable, sessionState: st, jpegQuality, updateConfig: uc }
+      const stats = { pid: process.pid, userDataDir, appPort: APP_PORT, platform: os.platform(), arch: os.arch(), uptime: process.uptime(), memory: process.memoryUsage(), audioAvailable, sessionState: st, jpegQuality }
       res.json({ ok: true, stats })
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
+
   app.post('/dev/set-quality', express.json(), (req, res) => {
     try {
       const q = Number(req.body.quality)
@@ -299,235 +300,93 @@ async function start() {
       res.json({ ok: true, quality: jpegQuality })
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
+
+  app.get('/dev/version', (req, res) => {
+    try {
+      const stablePath = getUpdateConfigPath('stable')
+      const unstablePath = getUpdateConfigPath('unstable')
+      let stable = null, unstable = null
+      try { stable = JSON.parse(fs.readFileSync(stablePath, 'utf8')) } catch (e) { stable = null }
+      try { unstable = JSON.parse(fs.readFileSync(unstablePath, 'utf8')) } catch (e) { unstable = null }
+      res.json({ ok: true, stable, unstable })
+    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
+  })
+
   app.get('/dev/check-updates', async (req, res) => {
     try {
-      const localOnly = req.query.local === '1' || req.query.local === 'true'
-      const qChannel = String(req.query.channel || '')
-      const cfg = loadUpdateConfig()
-      const channel = qChannel || cfg.channel || 'stable'
-      const out = { ok: true, currentChannel: cfg.channel || 'stable', currentVersion: cfg.currentVersion || null }
-      if (localOnly) {
-        return res.json(out)
-      }
+      const channel = String(req.query.channel || 'stable')
       const info = await getLatestInfoForChannel(channel)
-      if (!info) return res.json(Object.assign(out, { updateAvailable: false }))
-      out.latestVersion = info.latestVersion
-      out.latestMessage = info.latestMessage
-      out.updateAvailable = (!cfg.currentVersion) || (String(cfg.currentVersion) !== String(info.latestVersion))
-      out.channel = channel
-      res.json(out)
-    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
-  })
-  app.post('/dev/apply-update', express.json(), async (req, res) => {
-    try {
-      const channel = String(req.body.channel || loadUpdateConfig().channel || 'stable')
-      if (!['stable','unstable'].includes(channel)) return res.status(400).json({ ok: false, message: 'invalid channel' })
-      let result
-      try { result = await applyUpdateFromChannel(channel) } catch (e) { return res.status(500).json({ ok: false, message: 'apply failed: '+String(e) }) }
-      res.json({ ok: true, message: 'update applied', applied: result.applied, version: result.version, note: 'Backups created with .bak.*. Run npm install and restart server.' })
-    } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
-  })
-  app.get('/dev/export', (req, res) => {
-    try {
-      const wantFull = String(req.query.full || '0') === '1'
-      const includeSession = fs.existsSync(SESSION_FILE)
-      const includeProfile = fs.existsSync(userDataDir)
-      if (!includeSession && !includeProfile) return res.status(404).send('nothing to export')
-      const filename = wantFull ? 'exported_profile_full.tar.gz' : 'exported_profile_min.tar.gz'
-      res.setHeader('Content-Type', 'application/octet-stream')
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-      broadcastAll(wss, { type: 'export-start', filename, wantFull })
-      if (Archiver) {
-        const archive = Archiver('tar', { gzip: true, gzipOptions: { level: 9 } })
-        archive.on('warning', () => {})
-        archive.on('error', () => {})
-        archive.on('progress', (progress) => { try { broadcastAll(wss, { type: 'export-progress', processedBytes: progress.fsBytes || 0, entries: { processed: progress.entries.processed || 0 } }) } catch (e) {} })
-        archive.on('end', () => { broadcastAll(wss, { type: 'export-complete' }) })
-        archive.pipe(res)
-        if (includeSession) archive.file(SESSION_FILE, { name: path.posix.join('session_state', path.basename(SESSION_FILE)) })
-        if (includeProfile && wantFull) archive.directory(userDataDir, 'profile')
-        else if (includeProfile) {
-          const minimal = [
-            path.join(userDataDir, 'Default', 'Bookmarks'),
-            path.join(userDataDir, 'Default', 'Preferences'),
-            path.join(userDataDir, 'Default', 'Cookies'),
-            path.join(userDataDir, 'Extensions')
-          ]
-          for (const p of minimal) {
-            try {
-              if (fs.existsSync(p)) {
-                const stat = fs.statSync(p)
-                if (stat.isDirectory()) archive.directory(p, path.posix.join('profile', path.relative(userDataDir, p)))
-                else archive.file(p, { name: path.posix.join('profile', path.relative(userDataDir, p)) })
-              }
-            } catch (e) {}
-          }
-        }
-        archive.finalize().catch(() => {})
-        return
-      }
-      if (Tar) {
-        const items = []
-        if (includeSession) items.push(path.relative(__dirname, SESSION_FILE))
-        if (includeProfile) {
-          if (wantFull) items.push(path.relative(__dirname, userDataDir))
-          else {
-            const minimal = [
-              path.join(userDataDir, 'Default', 'Bookmarks'),
-              path.join(userDataDir, 'Default', 'Preferences'),
-              path.join(userDataDir, 'Default', 'Cookies'),
-              path.join(userDataDir, 'Extensions')
-            ]
-            for (const p of minimal) if (fs.existsSync(p)) items.push(path.relative(__dirname, p))
-          }
-        }
-        if (!items.length) return res.status(404).send('nothing to export')
-        const tarStream = Tar.c({ gzip: true, cwd: __dirname }, items)
-        tarStream.on('close', () => broadcastAll(wss, { type: 'export-complete' }))
-        tarStream.pipe(res)
-        return
-      }
-      res.status(500).send('No archiver available')
-    } catch (e) { try { if (!res.headersSent) res.status(500).send(String(e)) } catch (ee) {} }
-  })
-  app.post('/dev/import', uploadMw2.single('file'), async (req, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ ok: false, message: 'no file uploaded' })
-      const uploadedPath = req.file.path
-      const tmpDir = path.join(os.tmpdir(), `import_${Date.now()}`)
-      fs.mkdirSync(tmpDir, { recursive: true })
-      broadcastAll(wss, { type: 'import-start', name: req.file.originalname })
-      let extracted = false
-      let entriesCount = 0
-      const lower = uploadedPath.toLowerCase()
       try {
-        if ((lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) && Tar) {
-          await Tar.x({ file: uploadedPath, cwd: tmpDir, gzip: true, onentry: (entry) => { entriesCount++; broadcastAll(wss, { type: 'import-progress', entriesProcessed: entriesCount, name: entry.path }) } })
-          extracted = true
-        } else if ((lower.endsWith('.zip') || lower.endsWith('.jar')) && Unzipper) {
-          await new Promise((resolve, reject) => {
-            const stream = fs.createReadStream(uploadedPath).pipe(Unzipper.Parse())
-            stream.on('entry', (entry) => {
-              entriesCount++
-              broadcastAll(wss, { type: 'import-progress', entriesProcessed: entriesCount, name: entry.path })
-              const filePath = path.join(tmpDir, entry.path)
-              if (entry.type === 'Directory') {
-                fs.mkdirSync(filePath, { recursive: true })
-                entry.autodrain()
-              } else {
-                const dir = path.dirname(filePath)
-                fs.mkdirSync(dir, { recursive: true })
-                entry.pipe(fs.createWriteStream(filePath))
-              }
-            })
-            stream.on('close', resolve)
-            stream.on('error', reject)
-          })
-          extracted = true
-        } else if (AdmZip) {
-          const zip = new AdmZip(uploadedPath)
-          const zipEntries = zip.getEntries()
-          for (const ze of zipEntries) { entriesCount++; broadcastAll(wss, { type: 'import-progress', entriesProcessed: entriesCount, name: ze.entryName }) }
-          zip.extractAllTo(tmpDir, true)
-          extracted = true
-        } else {
-          const sp = spawnSync('tar', ['-xzf', uploadedPath, '-C', tmpDir], { timeout: 0 })
-          if (sp.status === 0) extracted = true
-        }
-      } catch (e) {
-        rimrafSync(tmpDir)
-        try { fs.unlinkSync(uploadedPath) } catch (e2) {}
-        broadcastAll(wss, { type: 'import-error', message: String(e) })
-        return res.status(500).json({ ok: false, message: 'extraction failed: ' + String(e) })
-      }
-      if (!extracted) {
-        rimrafSync(tmpDir)
-        try { fs.unlinkSync(uploadedPath) } catch (e) {}
-        broadcastAll(wss, { type: 'import-error', message: 'no extraction method available' })
-        return res.status(500).json({ ok: false, message: 'no extraction method available' })
-      }
-      broadcastAll(wss, { type: 'import-extracted', entries: entriesCount })
-      try { if (browser) { try { await browser.close() } catch (e) {} browser = null } } catch (e) {}
-      let extractedProfileRoot = null
-      const candidate = path.join(tmpDir, 'profile')
-      if (fs.existsSync(candidate)) extractedProfileRoot = candidate
-      if (!extractedProfileRoot) {
-        const walk = (base) => {
-          const stack = [base]
-          while (stack.length) {
-            const cur = stack.pop()
-            try {
-              const entries = fs.readdirSync(cur)
-              for (const e of entries) {
-                const full = path.join(cur, e)
-                try {
-                  const st = fs.statSync(full)
-                  if (st.isDirectory()) {
-                    const inner = fs.readdirSync(full)
-                    if (inner.includes('Default') || inner.includes('Bookmarks') || inner.includes('Preferences')) return full
-                    stack.push(full)
-                  }
-                } catch (ee) {}
-              }
-            } catch (e) {}
-          }
-          return null
-        }
-        extractedProfileRoot = walk(tmpDir)
-      }
-      if (extractedProfileRoot && fs.existsSync(extractedProfileRoot)) {
-        try { rimrafSync(userDataDir) } catch (e) {}
-        try { fs.renameSync(extractedProfileRoot, userDataDir) } catch (e) {
-          try {
-            const copyRecursive = (src, dest) => {
-              const stat = fs.statSync(src)
-              if (stat.isDirectory()) {
-                if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true })
-                for (const f of fs.readdirSync(src)) copyRecursive(path.join(src, f), path.join(dest, f))
-              } else {
-                const dir = path.dirname(dest)
-                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-                fs.copyFileSync(src, dest)
-              }
-            }
-            copyRecursive(extractedProfileRoot, userDataDir)
-          } catch (err) {}
-        }
-      }
-      const possibleSessionFiles = []
-      const walkFiles = (base) => {
-        const stack = [base]
-        while (stack.length) {
-          const cur = stack.pop()
-          try {
-            const entries = fs.readdirSync(cur)
-            for (const e of entries) {
-              const full = path.join(cur, e)
-              try {
-                const st = fs.statSync(full)
-                if (st.isDirectory()) stack.push(full)
-                else if (e.toLowerCase() === 'session_state.json') possibleSessionFiles.push(full)
-              } catch (ee) {}
-            }
-          } catch (e) {}
-        }
-      }
-      walkFiles(tmpDir)
-      let applied = { profile: false, session: false }
-      if (fs.existsSync(userDataDir)) applied.profile = true
-      if (possibleSessionFiles.length) {
-        try { fs.copyFileSync(possibleSessionFiles[0], SESSION_FILE); applied.session = true } catch (e) {}
-      }
-      try { fs.unlinkSync(uploadedPath) } catch (e) {}
-      rimrafSync(tmpDir)
-      try { browser = await puppeteer.launch(launchOptions) } catch (e) {
-        broadcastAll(wss, { type: 'import-finish', ok: true, message: 'import applied but browser restart failed. Restart server manually.', applied })
-        return res.json({ ok: true, message: 'import applied but browser restart failed. Restart server manually.', applied })
-      }
-      broadcastAll(wss, { type: 'import-finish', ok: true, message: 'import applied and browser restarted', applied })
-      return res.json({ ok: true, message: 'import applied and browser restarted', applied })
+        const cfgPath = getUpdateConfigPath(channel)
+        const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : {}
+        cfg.lastChecked = new Date().toISOString()
+        if (info.ok) cfg.tarballUrl = info.tarballUrl || cfg.tarballUrl || null
+        try { fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8') } catch (e) {}
+      } catch (e) {}
+      res.json(info)
     } catch (e) { res.status(500).json({ ok: false, message: String(e) }) }
   })
+
+  app.post('/dev/apply-update', uploadMw.single('file'), async (req, res) => {
+    try {
+      const body = req.body || {}
+      const channel = String(body.channel || 'stable')
+      const cfgPath = getUpdateConfigPath(channel)
+      const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : { repo: (channel === 'stable' ? 'Hutlaw/remote-browser-stable' : 'Hutlaw/remote-browser-unstable') }
+      const repo = cfg.repo
+      const useUploaded = !!req.file
+      const tmpDir = path.join(os.tmpdir(), `update_${Date.now()}`)
+      fs.mkdirSync(tmpDir, { recursive: true })
+      let tarballPath = null
+      if (useUploaded) {
+        tarballPath = req.file.path
+      } else {
+        const info = await getLatestInfoForChannel(channel)
+        if (!info.ok || !info.tarballUrl) { rimrafSync(tmpDir); return res.status(500).json({ ok: false, message: 'failed to get tarball info' }) }
+        tarballPath = path.join(tmpDir, 'repo.tar.gz')
+        try {
+          await downloadToFile(info.tarballUrl, tarballPath)
+        } catch (e) {
+          rimrafSync(tmpDir)
+          return res.status(500).json({ ok: false, message: 'download failed: ' + String(e) })
+        }
+      }
+      const extractedDir = path.join(tmpDir, 'extracted')
+      fs.mkdirSync(extractedDir, { recursive: true })
+      const okExtract = await applyUpdateFromTarball(tarballPath, extractedDir)
+      if (!okExtract) {
+        rimrafSync(tmpDir)
+        try { if (useUploaded) fs.unlinkSync(tarballPath) } catch (e) {}
+        return res.status(500).json({ ok: false, message: 'extraction failed' })
+      }
+      const entries = fs.readdirSync(extractedDir)
+      let rootDir = extractedDir
+      if (entries.length === 1) {
+        const first = path.join(extractedDir, entries[0])
+        try { if (fs.statSync(first).isDirectory()) rootDir = first } catch (e) {}
+      }
+      const targets = ['server.js', path.join('public','index.html'), 'package.json', 'install-deps.sh']
+      const applied = {}
+      for (const t of targets) {
+        const found = findFileInExtracted(rootDir, path.basename(t))
+        if (!found) { applied[t] = false; continue }
+        const dest = path.join(__dirname, t)
+        const ok = backupAndReplace(found, dest)
+        applied[t] = !!ok
+      }
+      try {
+        const now = new Date().toISOString()
+        cfg.currentVersion = (await getLatestInfoForChannel(channel)).latestVersion || cfg.currentVersion || null
+        cfg.lastApplied = now
+        cfg.tarballUrl = cfg.tarballUrl || null
+        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8')
+      } catch (e) {}
+      try { if (!useUploaded) fs.unlinkSync(tarballPath) } catch (e) {}
+      rimrafSync(tmpDir)
+      return res.json({ ok: true, applied, restartRequired: true, message: 'update applied to files. server process must be restarted to use new code.' })
+    } catch (e) { return res.status(500).json({ ok: false, message: String(e) }) }
+  })
+
   const server = http.createServer(app)
   const wss = new WebSocket.Server({ noServer: true })
   const wsaudio = new WebSocket.Server({ noServer: true })
@@ -537,6 +396,7 @@ async function start() {
     else if (request.url.startsWith('/audio')) wsaudio.handleUpgrade(request, socket, head, (ws) => { wsaudio.emit('connection', ws, request) })
     else socket.destroy()
   })
+
   async function applyStealthLikeHardening(page) {
     try {
       await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' })
@@ -548,6 +408,7 @@ async function start() {
       })
     } catch (e) {}
   }
+
   async function createSingleTab(session, url) {
     const page = await browser.newPage()
     await page.setViewport(VIEWPORT)
@@ -590,6 +451,7 @@ async function start() {
     if (url) try { await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }) } catch (e) {}
     return tab
   }
+
   async function startScreencastForTab(session, tab) {
     if (!tab || !tab.cdp) return
     try { await tab.cdp.send('Page.startScreencast', { format: 'jpeg', quality: jpegQuality, everyNthFrame: 1 }) } catch (e) {}
@@ -598,6 +460,7 @@ async function start() {
     if (!tab || !tab.cdp) return
     try { await tab.cdp.send('Page.stopScreencast') } catch (e) {}
   }
+
   wss.on('connection', async (ws) => {
     const id = makeId()
     const session = { id, ws, tab: null, lastUserActivityTs: Date.now() }
@@ -669,12 +532,31 @@ async function start() {
       delete sessions[id]
     }
   })
-  wsaudio.on('connection', (ws) => {})
+
+  wsaudio.on('connection', (ws) => {
+    ws.isSource = false
+    ws.on('message', (msg) => {
+      if (typeof msg === 'string') {
+        try { const d = JSON.parse(msg); if (d && d.type === 'source-announce') { ws.isSource = true } } catch (e) {}
+        return
+      }
+      if (msg instanceof Buffer || msg instanceof ArrayBuffer) {
+        wsaudio.clients.forEach(c => {
+          if (c !== ws && c.readyState === WebSocket.OPEN && !c.isSource) {
+            try { c.send(msg) } catch (e) {}
+          }
+        })
+      }
+    })
+  })
+
   startAudioCapture(wsaudio, (obj) => broadcastAll(wss, obj))
+
   server.listen(APP_PORT, '0.0.0.0', () => {
     const addr = server.address()
     console.log(`Server listening on http://${addr.address}:${addr.port}`)
   }).on('error', (err) => { console.error('Failed to bind server:', err); process.exit(1) })
+
   process.on('SIGINT', async () => {
     try { broadcastAll(wss, { type: 'server-shutdown', message: 'server is shutting down' }) } catch (e) {}
     try { Object.values(sessions).forEach(s => { try { s.ws.send(JSON.stringify({ type: 'warning', message: 'Server shutting down' })) } catch (e) {} }) } catch (e) {}

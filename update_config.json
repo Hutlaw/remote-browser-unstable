@@ -1,6 +1,6 @@
 {
   "channel": "unstable",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "repo": "https://github.com/Hutlaw/remote-browser-unstable",
   "branch": "main",
   "files": [
